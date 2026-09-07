@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">视频解析</string>
+    <string name="a11y_desc">dy-dl 后台剪贴板监控：检测到抖音链接时自动加入下载队列。本服务不读取屏幕内容，仅使用剪贴板权限。</string>
+</resources>

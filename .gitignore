@@ -1,0 +1,27 @@
+# 构建产物
+android/build/
+android/dy-dl.apk
+android/dy-dl.apk.idsig
+
+# 签名密钥 - 绝不入库
+android/debug.keystore
+*.keystore
+*.jks
+
+# 服务器/环境特定
+admin_token.txt
+cookies.txt
+
+# 一次性脚本
+android/patch_*.py
+android/mem_*.py
+android/fix_*.py
+android/sanitize.py
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+.vscode/

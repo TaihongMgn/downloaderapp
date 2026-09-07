@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 抖音 CDN 拒绝带第三方 Referer 的请求(403 Byte-nginx), 必须禁referrer -->
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0f1115">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="视频解析">
+<meta name="mobile-web-app-capable" content="yes">
+<title>视频解析 · Hr's Tools</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --card2: #1d212b; --line: #2a2f3c;
+    --text: #e8eaf0; --muted: #9aa3b2; --accent: #4f8cff; --accent2: #22c1dc;
+    --ok: #3ecf8e; --warn: #ffb454; --err: #ff6b6b; --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Manrope", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    background: radial-gradient(1200px 600px at 80% -10%, #1a2340 0%, var(--bg) 55%);
+    color: var(--text); min-height: 100vh; padding: 24px 16px 60px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 22px; }
+  header h1 { font-size: 22px; font-weight: 800; letter-spacing: .5px; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 20px; margin-bottom: 16px;
+  }
+  .input-row { display: flex; gap: 10px; }
+  .input-row .paste {
+    background: var(--card2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 10px; padding: 0 14px; font-size: 13.5px; cursor: pointer; white-space: nowrap;
+    transition: border-color .15s;
+  }
+  .input-row .paste:hover { border-color: var(--accent); }
+  input[type=text] {
+    flex: 1; background: var(--card2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 10px; padding: 12px 14px; font-size: 15px; outline: none;
+    transition: border-color .15s;
+  }
+  input[type=text]:focus { border-color: var(--accent); }
+  button {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #fff; border: 0; border-radius: 10px; padding: 12px 22px;
+    font-size: 15px; font-weight: 700; cursor: pointer; transition: opacity .15s;
+  }
+  button:hover { opacity: .9; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost {
+    background: var(--card2); border: 1px solid var(--line); font-weight: 500; padding: 8px 14px;
+  }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 10px; line-height: 1.7; }
+  .status { margin-top: 14px; font-size: 14px; padding: 10px 14px; border-radius: 10px; display: none; }
+  .status.loading { display: block; background: #1a2233; color: var(--accent); }
+  .status.error { display: block; background: #2a1a1e; color: var(--err); white-space: pre-wrap; }
+  .result { display: none; }
+  .result.show { display: block; }
+  .cover {
+    width: 100%; max-height: 300px; object-fit: contain; border-radius: 10px;
+    background: #000; margin-bottom: 14px;
+  }
+  .title { font-size: 16.5px; font-weight: 700; line-height: 1.5; margin-bottom: 6px; }
+  .meta { color: var(--muted); font-size: 13px; margin-bottom: 12px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .tag {
+    display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 6px;
+    background: #223; color: var(--accent2); margin-right: 6px; vertical-align: 2px;
+  }
+  .stats { display: flex; gap: 16px; color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+  .variants { margin-top: 14px; }
+  .variants h3 { font-size: 13.5px; color: var(--muted); margin-bottom: 8px; font-weight: 600; }
+  .vrow {
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    background: var(--card2); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 14px; margin-bottom: 8px; font-size: 14px;
+  }
+  .vrow .q { font-weight: 700; }
+  .vrow .d { color: var(--muted); font-size: 12.5px; flex: 1; text-align: right; margin-right: 10px; }
+  .vrow a { color: var(--accent); text-decoration: none; font-size: 13.5px; white-space: nowrap; }
+  .vrow a:hover { text-decoration: underline; }
+  .imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-top: 10px; }
+  .imgs img { width: 100%; border-radius: 8px; display: block; }
+  .imgs a { display: block; position: relative; }
+  .imgs a span {
+    position: absolute; right: 6px; bottom: 6px; background: rgba(0,0,0,.65); color: #fff;
+    font-size: 11px; padding: 2px 7px; border-radius: 6px;
+  }
+  .tile { position: relative; }
+  .tile .dl {
+    position: absolute; left: 6px; bottom: 6px; background: rgba(0,0,0,.72); color: #fff;
+    border: 1px solid rgba(255,255,255,.28); border-radius: 6px; padding: 3px 9px;
+    font-size: 11.5px; cursor: pointer; z-index: 2;
+  }
+  .tile .dl:hover { background: rgba(79,140,255,.92); }
+  /* 图片查看器 */
+  .lightbox {
+    position: fixed; inset: 0; background: rgba(5,7,10,.94); z-index: 50;
+    display: none; align-items: center; justify-content: center; flex-direction: column;
+  }
+  .lightbox.show { display: flex; }
+  .lightbox img { max-width: 96vw; max-height: 82vh; object-fit: contain; border-radius: 6px; }
+  .lightbox .lbcap { color: var(--muted); font-size: 13px; margin-top: 12px; text-align: center; padding: 0 20px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 90vw; }
+  .lightbox .lbclose { position: absolute; top: 14px; right: 16px; background: var(--card2);
+    border: 1px solid var(--line); color: var(--text); border-radius: 50%; width: 38px; height: 38px;
+    font-size: 17px; cursor: pointer; }
+  .lightbox .lbsave { position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%); }
+  .toast {
+    position: fixed; left: 50%; bottom: 36px; transform: translateX(-50%);
+    background: #223; color: var(--text); padding: 10px 18px; border-radius: 10px;
+    font-size: 13.5px; border: 1px solid var(--line); opacity: 0; transition: opacity .2s;
+    pointer-events: none; z-index: 9;
+  }
+  .toast.show { opacity: 1; }
+  footer { text-align: center; color: #555d6d; font-size: 12px; margin-top: 30px; }
+  footer a { color: #667; }
+  .cdn-note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  /* ---- 解析队列 ---- */
+  .queue-card { display: none; }
+  .queue-card.show { display: block; }
+  .qhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .qhead h3 { font-size: 14px; color: var(--muted); font-weight: 600; }
+  .qhead .qops { display: flex; gap: 8px; }
+  .qhead .qops button { padding: 5px 12px; font-size: 12.5px; border-radius: 8px; }
+  .autodl {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted);
+    background: var(--card2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px;
+    cursor: pointer; user-select: none;
+  }
+  .autodl input { accent-color: var(--accent); cursor: pointer; }
+  .autodl:has(input:checked) { color: var(--ok); border-color: #2a4a3a; }
+  .qlist { display: flex; flex-direction: column; gap: 8px; }
+  .qitem {
+    display: flex; align-items: center; gap: 12px; background: var(--card2);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px;
+    cursor: pointer; transition: border-color .15s;
+  }
+  .qitem:hover { border-color: var(--accent); }
+  .qitem.active { border-color: var(--accent); background: #1a2233; }
+  .qitem .qstat { flex-shrink: 0; font-size: 12.5px; width: 66px; }
+  .qitem .qstat.wait { color: var(--muted); }
+  .qitem .qstat.run { color: var(--accent2); }
+  .qitem .qstat.ok { color: var(--ok); }
+  .qitem .qstat.err { color: var(--err); }
+  .qitem .qinfo { flex: 1; min-width: 0; }
+  .qitem .qtitle { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qitem .qmeta { color: var(--muted); font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qitem .qraw { color: #667; font-size: 11.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qitem .qredel {
+    flex-shrink: 0; background: none; border: 1px solid var(--line); border-radius: 8px;
+    color: var(--muted); font-size: 12px; padding: 4px 10px; cursor: pointer;
+  }
+  .qitem .qredel:hover { color: var(--text); border-color: var(--accent); }
+  .qempty { color: var(--muted); font-size: 13px; text-align: center; padding: 14px 0; }
+</style>
+</head>
+<body>
+<div class="lightbox" id="lightbox">
+  <button class="lbclose" id="lbclose">✕</button>
+  <img id="lbimg" alt="" referrerpolicy="no-referrer">
+  <div class="lbcap" id="lbcap"></div>
+  <button class="lbsave" id="lbsave">⬇ 保存图片</button>
+</div>
+
+<div class="wrap">
+  <header>
+    <h1>视频解析</h1>
+    <span class="sub">抖音 / YouTube / Bilibili / … (yt-dlp 全站)</span>
+  </header>
+
+  <div class="card">
+    <div class="input-row">
+      <input type="text" id="url" placeholder="粘贴视频链接或分享文本…" autocomplete="off" spellcheck="false">
+      <button class="paste" id="paste" title="读取剪贴板并加入解析队列">📋 粘贴入队</button>
+      <button id="go" title="把输入框链接加入解析队列">+ 加入队列</button>
+    </div>
+    <div class="hint">
+      支持抖音（含 v.douyin.com 短链、直接粘贴整个分享文案）及 yt-dlp 全站。
+      下载均为浏览器直连视频 CDN，服务器不经手文件流量。YouTube / Bilibili 等站点在海外服务器 IP 下风控较严，解析失败属预期，抖音通道不受影响。
+    </div>
+    <div class="status" id="status"></div>
+    <div class="cdn-note" id="cdnNote">ℹ 直链由浏览器直连视频 CDN 下载，服务器不经手文件流量；直链有时效，请尽快使用。</div>
+  </div>
+
+  <div class="card queue-card" id="queueCard">
+    <div class="qhead">
+      <h3>📋 解析下载队列 <span id="qcount"></span></h3>
+      <div class="qops">
+        <label class="autodl" title="解析成功后自动保存到本地（浏览器直连 CDN）">
+          <input type="checkbox" id="autoDl" checked> ⬇ 自动下载
+        </label>
+        <button class="ghost" id="qDlAll" title="逐个保存队列中已解析的抖音视频">⬇ 下载全部</button>
+        <button class="ghost" id="qRetryAll" title="重新解析所有失败项">重试失败</button>
+        <button class="ghost" id="qClear">清空队列</button>
+      </div>
+    </div>
+    <div class="qlist" id="qlist"></div>
+    <div class="qempty" id="qempty">队列空：点「📋 粘贴入队」读剪贴板，或输入链接后回车 / 点「+ 加入队列」</div>
+  </div>
+
+  <div class="card result" id="result">
+    <img class="cover" id="cover" alt="" hidden>
+    <div class="title" id="title"></div>
+    <div class="meta" id="meta"></div>
+    <div class="stats" id="stats"></div>
+    <div class="actions" id="actions"></div>
+    <div class="variants" id="variantsBox">
+      <h3>格式 / 画质</h3>
+      <div id="variants"></div>
+    </div>
+    <div class="variants" id="imgsBox" hidden>
+      <h3>图集 (点图新窗口看大图, 左下 ⬇ 保存)</h3>
+      <div class="imgs" id="imgs"></div>
+    </div>
+  </div>
+
+  <footer>
+    dy-dl · <a href="https://t.haoran.cc" target="_blank" rel="noopener">Hr's Tools</a> 成员 · 引擎 yt-dlp + 自研抖音签名通道 · 下载直连 CDN
+  </footer>
+</div>
+
+<script>
+/* ================= 工具 ================= */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function toast(msg) {
+  let el = document.querySelector('.toast');
+  if (!el) { el = document.createElement('div'); el.className = 'toast'; document.body.appendChild(el); }
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 2200);
+}
+function setStatus(kind, text) {
+  const el = $('status');
+  el.className = 'status ' + kind;
+  el.textContent = text;
+}
+function fmtDur(s) {
+  if (!s) return '';
+  if (s < 60) return s + ' 秒';
+  const m = Math.floor(s / 60), r = Math.round(s % 60);
+  return m + ' 分 ' + (r ? r + ' 秒' : '');
+}
+function fmtSize(b) {
+  if (!b) return '';
+  if (b > 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
+  if (b > 1048576) return (b / 1048576).toFixed(1) + ' MB';
+  return Math.round(b / 1024) + ' KB';
+}
+function safeName(s) {
+  return (s || 'video').slice(0, 60).replace(/[\\/:*?"<>|\n\r]/g, ' ').trim() || 'video';
+}
+const EXT_MAP = {'image/webp':'jpg','image/jpeg':'jpg','image/png':'png','image/heic':'heic','image/heif':'heif',
+                 'audio/mpeg':'mp3','audio/mp4':'m4a','audio/aac':'aac','video/mp4':'mp4','video/webm':'webm'};
+function copyText(text, btn) {
+  if (!text) { toast('该格式无直链'); return; }
+  const done = () => {
+    toast('✓ 直链已复制（直链有时效，几小时内有效）');
+    if (btn) { const t = btn.textContent; btn.textContent = '✓'; setTimeout(() => btn.textContent = t, 1200); }
+  };
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy'); ta.remove(); done();
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done).catch(fallback);
+  else fallback();
+}
+
+/* 浏览器直连 CDN 拉流 -> blob 强制保存 (抖音 CDN 均 ACAO:* ; 服务器不经手流量) */
+async function blobDownload(url, baseName, btn) {
+  if (!url) { toast('该内容没有直链'); return false; }
+  const orig = btn ? btn.innerHTML : '';
+  const setT = t => { if (btn) btn.textContent = t; };
+  if (btn) { btn.disabled = true; setT('⏳ 连接…'); }
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const total = +(resp.headers.get('content-length') || 0);
+    if (total > 800 * 1048576) throw new Error('too-big');
+    let blob;
+    if (resp.body) {
+      const reader = resp.body.getReader();
+      const chunks = []; let got = 0;
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        chunks.push(value); got += value.length;
+        setT(total ? `⏳ ${(got/1048576).toFixed(1)}/${(total/1048576).toFixed(1)}MB` : `⏳ ${(got/1048576).toFixed(1)}MB`);
+      }
+      blob = new Blob(chunks);
+    } else blob = await resp.blob();
+    const ct = (resp.headers.get('content-type') || '').split(';')[0].trim();
+    const ext = EXT_MAP[ct] || 'mp4';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = safeName(baseName) + '.' + ext;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    toast('✓ 已保存 ' + safeName(baseName) + '.' + ext);
+    return true;
+  } catch (e) {
+    toast('无法强制保存（链接可能过期），已打开原链，请手动另存');
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return false;
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+  }
+}
+
+/* ================= 解析队列 ================= */
+const FRESH_MS = 9 * 60 * 1000;   // 9 分钟内视为新鲜(与服务端 10 分钟缓存对齐)
+const QUEUE_MAX = 30;
+let queue = [];                    // {key, raw, status:queued|running|done|error, result, error, doneTs, reused}
+let currentKey = null;             // 结果卡当前显示的队列项
+let pumping = false;
+
+const DOUYIN_ID_RE = /(?:douyin\.com\/(?:video\/|note\/)|iesdouyin\.com\/share\/(?:video|note)\/|douyin\.com\/share\/(?:video|note)\/|modal_id=)(\d{15,})/;
+
+function extractDouyinId(url) {
+  const m = DOUYIN_ID_RE.exec(url);
+  return m ? m[1] : null;
+}
+function keyOf(url) {
+  const id = extractDouyinId(url);
+  if (id) return 'dy:' + id;
+  let u = url.replace(/[?&](utm_[^&]+|spm=[^&]+)/g, '').replace(/\?$/, '').replace(/\/+$/, '');
+  return 'u:' + u;
+}
+function extractUrls(text) {
+  return (text.match(/https?:\/\/[^\s"'<>）)】，。]+/g) || []).map(u => u.replace(/[.,;]+$/, ''));
+}
+const isActive = it => it.status === 'queued' || it.status === 'running';
+const isFresh = it => it.status === 'done' && it.doneTs && (Date.now() - it.doneTs < FRESH_MS);
+
+function saveQueue() {
+  try {
+    const slim = queue.map(q => ({
+      key: q.key, raw: q.raw, status: (q.status === 'running' || q.status === 'downloading') ? 'queued' : q.status,
+      result: q.status === 'done' ? q.result : undefined,
+      error: q.status === 'error' ? q.error : undefined,
+      doneTs: q.doneTs,
+    }));
+    sessionStorage.setItem('dydl_queue_v1', JSON.stringify(slim));
+  } catch (e) { /* 存储满/隐私模式: 忽略 */ }
+}
+function loadQueue() {
+  try {
+    const raw = sessionStorage.getItem('dydl_queue_v1');
+    if (!raw) return;
+    const items = JSON.parse(raw);
+    if (!Array.isArray(items)) return;
+    queue = items.map(q => {
+      if (q.status === 'done' && q.doneTs && Date.now() - q.doneTs < FRESH_MS) return q;
+      if (q.status === 'done') return { ...q, status: 'error', error: '缓存已过期，点「重试」重新解析' };
+      return { ...q, status: 'queued' };
+    });
+  } catch (e) { queue = []; }
+}
+
+function addUrlsFromText(text, srcLabel) {
+  const urls = extractUrls(text || '');
+  if (!urls.length) { toast((srcLabel || '') + '没有找到链接'); return 0; }
+  let added = 0, dup = 0, shown = false;
+  for (const url of urls) {
+    if (queue.length >= QUEUE_MAX) { toast(`队列最多 ${QUEUE_MAX} 条`); break; }
+    const key = keyOf(url);
+    if (queue.some(q => q.key === key && isActive(q))) { dup++; continue; }
+    // 已完成(新鲜)的同视频不再入队, 直接选中已有那条结果
+    const hit = queue.find(q => q.key === key && isFresh(q));
+    if (hit) {
+      currentKey = hit.key;
+      shown = true; dup++;
+      continue;
+    }
+    // 同 key 的旧 error/done(过期) 项保留, 新项正常入队
+    queue.push({ key, raw: url, status: 'queued' });
+    added++;
+  }
+  saveQueue(); renderQueue();
+  if (shown) renderResult(queue.find(q => q.key === currentKey) || {});
+  if (added) { toast(`已加入队列 ${added} 条` + (dup ? `，${dup} 条重复跳过` : '')); pump(); }
+  else if (dup) toast(shown ? '已在队列中，直接展示已有结果' : '这些链接已在队列中，未重复添加');
+  $('url').value = '';
+  return added;
+}
+
+let dlHintShown = false;
+async function pump() {
+  if (pumping) return;
+  pumping = true;
+  try {
+    while (true) {
+      const item = queue.find(q => q.status === 'queued');
+      if (!item) break;
+      item.status = 'running';
+      renderQueue();
+      try {
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 90000);   // 单条解析 90s 超时, 防队列卡死
+        let data;
+        try {
+          const resp = await fetch('/api/parse?url=' + encodeURIComponent(item.raw), { signal: ctl.signal });
+          data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+        } finally { clearTimeout(timer); }
+        // 同 id 二次去重: 服务端已做缓存, 这里防同一视频以不同形态重复展示
+        if (data.id && data.source) {
+          const dup = queue.find(q => q !== item && (q.status === 'done') && q.result &&
+                                      q.result.id === data.id && q.result.source === data.source &&
+                                      (!q.doneTs || Date.now() - q.doneTs < FRESH_MS));
+          if (dup) {
+            // 已有相同结果: 本行不入列, 直接合并到已有行
+            dup.doneTs = Date.now();           // 刷新新鲜度
+            dup.reused = true;
+            queue.splice(queue.indexOf(item), 1);
+            currentKey = dup.key;
+            saveQueue(); renderQueue();
+            toast(`「${(data.title || '').slice(0, 14)}…」已在队列中，直接展示`);
+            continue;
+          }
+        }
+        item.status = 'done'; item.result = data; item.doneTs = Date.now(); item.error = null;
+        currentKey = item.key;
+        saveQueue(); renderQueue();
+        // 自动下载: App桥/SW 交给系统下载管理器(后台继续); 浏览器兑底 blob
+        // 视频与图文帖都会自动下载; 其他平台不自动(直链多绑服务器 IP)
+        if ($('autoDl').checked && data.source === 'douyin') {
+          const isApp = !!(window.AndroidDyDl && AndroidDyDl.saveMotion);
+          const targets = data.is_image_post
+            ? (data.images || []).map((u, i) => {
+                const lv = (data.live_videos || [])[i] || '';
+                return [u, `${data.title}_${i + 1}`, 'jpg', lv];
+              })
+            : ((data.direct_urls.video || [])[0]
+                ? [[data.direct_urls.video[0], data.title, 'mp4', '']] : []);
+          if (targets.length) {
+            if (!dlHintShown && !IS_APP) { dlHintShown = true; toast('提示：浏览器若提示"下载多个文件"，请点允许'); }
+            item.status = 'downloading';
+            renderQueue();
+            let ok = true;
+            for (const [u, nm2, ext, lv] of targets) {
+              if (isApp && lv) {
+                // App: 原生合成动态照片 (单文件 JPG, 相册原生动图)
+                ok = AndroidDyDl.saveMotion(u, lv, nm2) && ok;
+                await new Promise(res => setTimeout(res, 150));
+                continue;
+              }
+              if (lv) await download(lv, nm2 + '_live', 'mp4', null);
+              const r = await download(u, nm2, ext, null);
+              if (r === false) ok = false;
+              await new Promise(res => setTimeout(res, 150));
+            }
+            // 无论成败保留行: 成功标"下载完成", 失败便于手动重下 (用户要求不立刻删除)
+            item.dlTs = ok ? Date.now() : 0;
+            item.dlFailed = !ok;
+          }
+        }
+      } catch (e) {
+        item.status = 'error';
+        item.error = e.message || String(e);
+      }
+      saveQueue(); renderQueue();
+    }
+  } finally { pumping = false; }
+}
+
+function retryItem(idx) {
+  const it = queue[idx];
+  if (!it || it.status === 'running') return;
+  it.status = 'queued'; it.error = null; it.result = null;
+  saveQueue(); renderQueue(); pump();
+}
+
+/* ================= 队列渲染 ================= */
+const STAT_TXT = { queued: '排队中', running: '解析中…', downloading: '⬇ 下载中', done: '✓ 完成', error: '✗ 失败' };
+const STAT_CLS = { queued: 'wait', running: 'run', downloading: 'run', done: 'ok', error: 'err' };
+
+function renderQueue() {
+  const card = $('queueCard');
+  card.classList.toggle('show', queue.length > 0);
+  $('qempty').style.display = queue.length ? 'none' : 'block';
+  const doneN = queue.filter(q => q.status === 'done').length;
+  const runN = queue.filter(q => isActive(q)).length;
+  $('qcount').textContent = queue.length ? `(${doneN}/${queue.length})` : '';
+  $('qRetryAll').style.display = queue.some(q => q.status === 'error') ? '' : 'none';
+  $('qDlAll').style.display = $('autoDl').checked ? 'none' :
+    (queue.some(q => q.status === 'done' && q.result && q.result.source === 'douyin' &&
+      !q.result.is_image_post && (q.result.direct_urls.video || [])[0]) ? '' : 'none');
+
+  const list = $('qlist');
+  list.innerHTML = '';
+  queue.forEach((q, idx) => {
+    const row = document.createElement('div');
+    row.className = 'qitem' + (q.key === currentKey ? ' active' : '');
+    row.onclick = () => { if (q.status === 'done') { currentKey = q.key; renderQueue(); renderResult(q); } };
+
+    const stat = document.createElement('span');
+    stat.className = 'qstat ' + (STAT_CLS[q.status] || 'wait');
+    stat.textContent = STAT_TXT[q.status] || q.status;
+    row.appendChild(stat);
+
+    const info = document.createElement('div');
+    info.className = 'qinfo';
+    const t = document.createElement('div');
+    t.className = 'qtitle';
+    t.textContent = q.status === 'done'
+      ? (q.result && q.result.title || '(无标题)')
+      : (STAT_TXT[q.status] || q.status);
+    info.appendChild(t);
+    const meta = document.createElement('div');
+    meta.className = 'qmeta';
+    meta.textContent = q.status === 'error' ? (q.error || '解析失败')
+      : q.status === 'downloading' ? '正在保存到本地…'
+      : q.status === 'dlDone' ? [q.result && q.result.author, '已保存到 DCIM/Hrdl'].filter(Boolean).join(' · ')
+      : q.status === 'done' ? [q.result && q.result.author, q.dlFailed ? '✗ 下载失败, 可重下' : (q.dlTs ? '已保存' : '未自动下载')].filter(Boolean).join(' · ')
+      : extractDouyinId(q.raw) ? '抖音 ' + extractDouyinId(q.raw)
+      : q.raw.slice(0, 60);
+    info.appendChild(meta);
+    const rawline = document.createElement('div');
+    rawline.className = 'qraw';
+    rawline.textContent = q.raw;
+    info.appendChild(rawline);
+    row.appendChild(info);
+
+    const del = document.createElement('button');
+    del.className = 'qredel';
+    if (q.status === 'downloading') {
+      del.textContent = '…'; del.disabled = true;
+    } else {
+      del.textContent = q.status === 'error' ? '重试' : '移除';
+      del.onclick = ev => {
+        ev.stopPropagation();
+        const i = queue.findIndex(x => x.key === q.key);  // 按 key 定位, 防渲染下标失效
+        if (q.status === 'error') { retryItem(i); return; }
+        queue.splice(i, 1);
+        if (currentKey === q.key) {
+          const lastDone = [...queue].reverse().find(x => x.status === 'done');
+          currentKey = lastDone ? lastDone.key : null;
+          renderResult(lastDone || {});
+        }
+        saveQueue(); renderQueue();
+      };
+    }
+    row.appendChild(del);
+    list.appendChild(row);
+  });
+
+  const cur = queue.find(q => q.key === currentKey);
+  renderResult(cur || {});
+}
+
+/* ================= 下载调度: App桥 > SW系统下载 > blob ================= */
+const IS_APP = !!(window.AndroidDyDl && typeof AndroidDyDl.saveFile === 'function');
+let SW_READY = false;
+if (!IS_APP && 'serviceWorker' in navigator && location.protocol === 'https:') {
+  navigator.serviceWorker.register('/sw.js').then(reg => {
+    if (reg.active || navigator.serviceWorker.controller) SW_READY = true;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { SW_READY = true; });
+  }).catch(() => {});
+}
+// 统一入口: 返回 true=已交给系统(立即完成), false=失败, blob 路径返回其结果
+async function download(url, baseName, ext, btn) {
+  if (IS_APP) {
+    const ok = AndroidDyDl.saveFile(url, safeName(baseName) + '.' + (ext || 'mp4'));
+    if (ok) {
+      if (btn) { const t = btn.textContent; btn.textContent = '⏳ 下载中'; setTimeout(() => btn.textContent = t, 3000); }
+      return true;
+    }
+    toast('✗ 下载提交失败，请重试');
+    return false;
+  }
+  if (SW_READY) {
+    location.href = '/dl?u=' + encodeURIComponent(url) + '&n=' + encodeURIComponent(safeName(baseName));
+    if (btn) { const t = btn.textContent; btn.textContent = '✓ 已交系统'; setTimeout(() => btn.textContent = t, 1500); }
+    toast('已交给系统下载（通知栏查看，支持后台）');
+    return true;
+  }
+  return await blobDownload(url, baseName, btn);   // 浏览器兑底: 扩展名由响应 content-type 推断
+}
+function blobBtn(url, name, label, cls, ext) {
+  const b = document.createElement('button');
+  if (cls) b.className = cls;
+  b.textContent = label;
+  b.onclick = () => download(url, name, ext, b);
+  return b;
+}
+
+/* ================= 结果卡渲染 ================= */
+function copyBtn(text, label) {
+  const d = document.createElement('button');
+  d.className = 'ghost';
+  d.textContent = label || '复制直链';
+  d.onclick = () => copyText(text, d);
+  return d;
+}
+function renderResult(q) {
+  const r = q && q.result;
+  const card = $('result');
+  if (!r) { card.classList.remove('show'); return; }
+  card.classList.add('show');
+
+  const title = $('title');
+  title.textContent = (q.reused ? '♻ ' : '') + (r.title || '(无标题)');
+
+  const tag = `<span class="tag">${esc(r.source === 'douyin' ? '抖音' : (r.extractor || r.source))}</span>`;
+  const note = q.reused ? '<span class="tag" style="color:#e8c268">缓存复用</span>' : '';
+  $('meta').innerHTML = `${esc(r.author ? '👤 ' + r.author : '')}${r.duration ? ' · ⏱ ' + fmtDur(r.duration) : ''} · ${tag}${note}`;
+
+  const st = r.stats || {};
+  const parts = [];
+  if (st.likes) parts.push('❤ ' + st.likes);
+  if (st.comments) parts.push('💬 ' + st.comments);
+  if (st.shares) parts.push('↗ ' + st.shares);
+  $('stats').textContent = parts.join(' · ');
+
+  if (r.cover) { $('cover').src = r.cover; $('cover').referrerPolicy = 'no-referrer'; $('cover').hidden = false; }
+  else $('cover').hidden = true;
+
+  const acts = $('actions');
+  acts.innerHTML = '';
+  const bgmBtn = () => {
+    const au = (r.direct_urls.audio || [])[0];
+    if (!au) return null;
+    return blobBtn(au, r.title + '_BGM', '🎵 下载 BGM', 'ghost', 'mp3');
+  };
+  if (r.is_image_post) {
+    const n = (r.images || []).length;
+    const b = document.createElement('button');
+    b.textContent = `🖼 查看 ${n} 张图片`;
+    b.onclick = () => { $('imgsBox').hidden = false; $('imgsBox').scrollIntoView({behavior:'smooth'}); };
+    acts.appendChild(b);
+    if (n === 1) acts.appendChild(blobBtn(r.images[0], r.title, '⬇ 保存图片', null, 'jpg'));
+    if ((r.live_videos || []).some(x => x)) {
+      const bt = document.createElement('button');
+      bt.className = 'ghost';
+      bt.textContent = '⬇ 全部 Live 实况';
+      bt.onclick = async () => {
+        const inApp = !!(window.AndroidDyDl && AndroidDyDl.saveMotion);
+        const pairs = (r.images || []).map((u, i) => [i, (r.live_videos || [])[i]]).filter(p => p[1]);
+        for (let k = 0; k < pairs.length; k++) {
+          toast(`正在保存 Live ${k + 1}/${pairs.length} …`);
+          const [i, lv] = pairs[k];
+          if (inApp) AndroidDyDl.saveMotion(r.images[i], lv, `${r.title}_${i + 1}`);
+          else { await download(lv, `${r.title}_${i + 1}_live`, 'mp4', null); await new Promise(res => setTimeout(res, 400)); }
+        }
+      };
+      acts.appendChild(bt);
+    }
+    else if (n > 1) {
+      const bAll = document.createElement('button');
+      bAll.textContent = `⬇ 逐张保存全部 (${n})`;
+      bAll.onclick = async () => {
+        const lv = r.live_videos || [];
+        for (let i = 0; i < r.images.length; i++) {
+          toast(`正在保存 ${i + 1}/${n} …`);
+          await download(r.images[i], `${r.title}_${i + 1}`, 'jpg', null);
+          if (lv[i]) { await download(lv[i], `${r.title}_${i + 1}_live`, 'mp4', null); }
+          await new Promise(res => setTimeout(res, 400));
+        }
+      };
+      acts.appendChild(bAll);
+    }
+    acts.appendChild(copyBtn((r.images || []).join('\n'), '复制图片直链'));
+    const bg = bgmBtn();
+    if (bg) acts.appendChild(bg);
+  } else if (r.source === 'douyin') {
+    const u = (r.direct_urls.video || [])[0];
+    if (u) {
+      acts.appendChild(blobBtn(u, r.title, '⬇ 下载视频 (无水印·最高H264)', null, 'mp4'));
+      acts.appendChild(copyBtn(u));
+      const bg = bgmBtn();
+      if (bg) acts.appendChild(bg);
+    }
+  } else {
+    const prog = (r.variants || []).find(v => v.vcodec !== 'none' && v.acodec !== 'none' && v.url)
+              || (r.variants || []).find(v => v.url);
+    if (prog) {
+      acts.appendChild(blobBtn(prog.url, r.title, '⬇ 下载', null, prog.ext || 'mp4'));
+      acts.appendChild(copyBtn(prog.url));
+    }
+    const a2 = document.createElement('button');
+    a2.className = 'ghost';
+    a2.textContent = '原始页面 ↗';
+    if (r.web_url) a2.onclick = () => window.open(r.web_url, '_blank', 'noopener,noreferrer');
+    acts.appendChild(a2);
+  }
+
+  const vs = r.variants || [];
+  $('variantsBox').hidden = vs.length === 0;
+  const box = $('variants'); box.innerHTML = '';
+  vs.forEach(v => {
+    const row = document.createElement('div');
+    row.className = 'vrow';
+    const q2 = v.note || (v.height ? v.height + 'p' : '默认');
+    const desc = [v.ext && v.ext.toUpperCase(), fmtSize(v.filesize)].filter(Boolean).join(' · ');
+    row.innerHTML = `<span class="q">${esc(q2)}</span><span class="d">${esc(desc)}</span>`;
+    const u = (v.urls && v.urls[0]) || v.url;
+    if (u) {
+      const db = blobBtn(u, r.title + '_' + q2, '下载', 'ghost', v.ext || 'mp4');
+      if (v.h265) {
+        db.title = 'H.265/HEVC：码率更高，但部分播放器无解码器会只有声音没画面';
+        db.style.borderColor = '#5a4a2a';
+      }
+      row.appendChild(db);
+      row.appendChild(copyBtn(u, '复制'));
+    }
+    box.appendChild(row);
+  });
+
+  const ib = $('imgs'); ib.innerHTML = '';
+  if (r.images && r.images.length) {
+    $('imgsBox').hidden = false;
+    r.images.forEach((u, i) => {
+      const tile = document.createElement('div');
+      tile.className = 'tile';
+      const pv = document.createElement('div');
+      pv.style.cursor = 'pointer';
+      pv.onclick = () => openLightbox(u, `${r.title || '图集'} · ${i + 1}/${r.images.length}`);
+      const img = document.createElement('img');
+      img.src = u; img.loading = 'lazy'; img.referrerPolicy = 'no-referrer';
+      const s = document.createElement('span');
+      s.textContent = (i + 1) + '/' + r.images.length;
+      pv.appendChild(img); pv.appendChild(s);
+      const d = document.createElement('button');
+      d.className = 'dl';
+      d.textContent = '⬇ 保存';
+      d.onclick = ev => { ev.stopPropagation(); download(u, `${r.title || '图集'}_${i + 1}`, 'jpg', d); };
+      tile.appendChild(pv); tile.appendChild(d);
+      const lvUrl = (r.live_videos && r.live_videos[i]) || '';
+      if (lvUrl) {
+        const dl2 = document.createElement('button');
+        dl2.className = 'dl';
+        dl2.style.left = 'auto'; dl2.style.right = '6px';
+        dl2.textContent = '⬇ 实况';
+        dl2.title = '保存为动态照片 (JPG 内嵌实况视频, 小米/谷歌相册原生动图)';
+        dl2.onclick = ev => {
+          ev.stopPropagation();
+          if (window.AndroidDyDl && AndroidDyDl.saveMotion) AndroidDyDl.saveMotion(u, lvUrl, `${r.title || '图集'}_${i + 1}`);
+          else download(lvUrl, `${r.title || '图集'}_${i + 1}_live`, 'mp4', dl2);
+        };
+        tile.appendChild(dl2);
+      }
+      ib.appendChild(tile);
+    });
+  } else $('imgsBox').hidden = true;
+}
+
+/* ================= 图片查看器 (App/浏览器内预览, 不跳外部) ================= */
+function openLightbox(url, caption) {
+  const lb = $('lightbox');
+  $('lbimg').src = url;
+  $('lbcap').textContent = caption || '';
+  const save = $('lbsave');
+  const base = (caption || 'image').split(' · ')[0];
+  save.onclick = () => download(url, base, 'jpg', save);
+  lb.classList.add('show');
+}
+$('lbclose').onclick = () => { $('lightbox').classList.remove('show'); $('lbimg').src = ''; };
+$('lightbox').addEventListener('click', e => {
+  if (e.target === $('lightbox')) { $('lightbox').classList.remove('show'); $('lbimg').src = ''; }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('lightbox').classList.contains('show')) {
+    $('lightbox').classList.remove('show'); $('lbimg').src = '';
+  }
+});
+
+/* ================= 批量下载 ================= */
+async function downloadAllVideos() {
+  const targets = queue.filter(q => q.status === 'done' && q.result &&
+    q.result.source === 'douyin' && !q.result.is_image_post &&
+    (q.result.direct_urls.video || [])[0]);
+  if (!targets.length) { toast('队列里没有可下载的抖音视频'); return; }
+  for (let i = 0; i < targets.length; i++) {
+    toast(`📦 批量下载 ${i + 1}/${targets.length}：${(targets[i].result.title || '').slice(0, 16)}…`);
+    await download(targets[i].result.direct_urls.video[0], targets[i].result.title, 'mp4', null);
+    await new Promise(res => setTimeout(res, 600));
+  }
+  toast('✓ 批量下载完成');
+}
+
+/* ================= 入口 ================= */
+$('go').onclick = () => {
+  const t = $('url').value.trim();
+  if (!t) { $('url').focus(); return; }
+  addUrlsFromText(t, '输入框');
+};
+$('paste').onclick = async () => {
+  // App 内: WebView 的 clipboard API 权限受限, 直接走原生桥
+  if (IS_APP && typeof AndroidDyDl.getClipboard === 'function') {
+    const text = AndroidDyDl.getClipboard();
+    if (!text) { toast('剪贴板是空的'); return; }
+    addUrlsFromText(text, '剪贴板');
+    return;
+  }
+  try {
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      const text = await navigator.clipboard.readText();
+      if (!text) { toast('剪贴板是空的'); return; }
+      addUrlsFromText(text, '剪贴板');
+      return;
+    }
+    throw new Error('unavailable');
+  } catch (e) {
+    // 剪贴板 API 不可用/被拒(如 iframe 权限策略): 聚焦输入框让用户 Ctrl+V
+    $('url').focus();
+    toast('请按 Ctrl+V 粘贴到输入框，再点「+ 加入队列」（浏览器未授权自动读取）');
+  }
+};
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') { addUrlsFromText($('url').value, '输入框'); } });
+$('qClear').onclick = () => {
+  queue = queue.filter(q => isActive(q));
+  const lastDone = [...queue].reverse().find(x => x.status === 'done');
+  currentKey = lastDone ? lastDone.key : null;
+  saveQueue(); renderQueue(); toast('已清空已完成/失败项');
+};
+$('qRetryAll').onclick = () => {
+  queue.forEach(q => { if (q.status === 'error') { q.status = 'queued'; q.error = null; } });
+  saveQueue(); renderQueue(); pump();
+};
+$('qDlAll').onclick = () => downloadAllVideos();
+$('autoDl').addEventListener('change', () => {
+  try { localStorage.setItem('dydl_autoDl', $('autoDl').checked ? '1' : '0'); } catch (e) {}
+  renderQueue();
+});
+try { if (localStorage.getItem('dydl_autoDl') === '0') $('autoDl').checked = false; } catch (e) {}
+
+loadQueue();
+renderQueue();
+const qp = new URLSearchParams(location.search);
+if (qp.get('url')) { addUrlsFromText(qp.get('url'), 'URL参数'); }
+
+
+</script>
+</body>
+</html>
