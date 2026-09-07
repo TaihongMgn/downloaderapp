@@ -29,6 +29,23 @@ import android.widget.Toast;
 public class FloatBallService extends Service {
 
     static volatile boolean running = false;
+    private static volatile FloatBallService uiInstance = null;
+    private static volatile String animState = "idle";   // idle | pulse | working
+
+    /** DownloadService 回调: 队列变化 (任意线程) */
+    static void onQueueChanged(String kind) {
+        if ("pulse".equals(kind)) animState = "pulse";
+        else if (uiInstance != null && uiInstance.pendingCount() > 0) animState = "working";
+        FloatBallService svc = uiInstance;
+        if (svc != null) svc.handler.post(() -> {
+            if ("pulse".equals(animState)) svc.playPulse();
+            svc.updateBadge();
+        });
+    }
+
+    int pendingCount() {
+        return DownloadService.activeCount();
+    }
 
     private WindowManager wm;
     private View ball;
@@ -44,6 +61,7 @@ public class FloatBallService extends Service {
         super.onCreate();
         if (!Settings.canDrawOverlays(this)) { stopSelf(); return; }
         running = true;
+        uiInstance = this;
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
 
         int size = dp(52);
@@ -148,17 +166,44 @@ public class FloatBallService extends Service {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
+    /** 入队脉冲: 波纹扩散 + 球体弹一下 */
+    void playPulse() {
+        if (ball instanceof BallView) ((BallView) ball).firePulse();
+        if (ball != null) {
+            android.view.animation.ScaleAnimation sa = new android.view.animation.ScaleAnimation(
+                    1f, 1.25f, 1f, 1.25f,
+                    android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f,
+                    android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f);
+            sa.setDuration(140);
+            sa.setRepeatMode(android.view.animation.Animation.REVERSE);
+            sa.setRepeatCount(1);
+            sa.setAnimationListener(new android.view.animation.Animation.AnimationListener() {
+                public void onAnimationStart(android.view.animation.Animation a) {}
+                public void onAnimationRepeat(android.view.animation.Animation a) {}
+                public void onAnimationEnd(android.view.animation.Animation a) {
+                    animState = DownloadService.activeCount() > 0 ? "working" : "idle";
+                }
+            });
+            ball.startAnimation(sa);
+        }
+    }
+
     void updateBadge() {
         int n = DownloadService.activeCount();
         handler.post(() -> {
             if (badge == null) return;
             badge.setText(n > 0 ? String.valueOf(n) : "");
+            if (ball instanceof BallView) {
+                ((BallView) ball).setWorking(n > 0);
+                ball.invalidate();
+            }
         });
     }
 
     @Override
     public void onDestroy() {
         running = false;
+        uiInstance = null;
         if (ball != null) {
             try { wm.removeView(ball); } catch (Exception ignored) {}
             ball = null;
@@ -220,10 +265,45 @@ public class FloatBallService extends Service {
     }
 
     class BallView extends View {
+        private float pulseR = -1f;
+        private boolean working = false;
+        private final android.os.Handler animHandler = new android.os.Handler(Looper.getMainLooper());
+        private final Runnable breathe = new Runnable() {
+            @Override public void run() {
+                invalidate();
+                if (working) animHandler.postDelayed(this, 400);
+            }
+        };
         BallView(Context c) { super(c); }
+
+        void firePulse() {
+            pulseR = 0f;
+            animPulse();
+        }
+        private void animPulse() {
+            if (pulseR < 0) return;
+            pulseR += getWidth() / 14f;
+            if (pulseR > getWidth() * 1.1f) { pulseR = -1f; invalidate(); return; }
+            invalidate();
+            animHandler.postDelayed(this::animPulse, 16);
+        }
+        void setWorking(boolean w) {
+            if (working != w) {
+                working = w;
+                if (working) animHandler.post(breathe); else animHandler.removeCallbacks(breathe);
+            }
+        }
 
         @Override
         protected void onDraw(Canvas canvas) {
+            if (pulseR >= 0) {
+                Paint wave = new Paint(Paint.ANTI_ALIAS_FLAG);
+                wave.setStyle(Paint.Style.STROKE);
+                wave.setStrokeWidth(dp(2));
+                float t = pulseR / (getWidth() * 1.1f);
+                wave.setColor(Color.argb((int) (160 * (1 - t)), 79, 140, 255));
+                canvas.drawCircle(getWidth() / 2f, getHeight() / 2f, pulseR, wave);
+            }
             float cx = getWidth() / 2f, cy = getHeight() / 2f;
             float r = Math.min(cx, cy) - 2;
             Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);

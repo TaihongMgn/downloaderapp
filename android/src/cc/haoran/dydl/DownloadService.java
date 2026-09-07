@@ -113,6 +113,7 @@ public class DownloadService extends Service {
                 return;
             }
         }
+        notifyBall("pulse");   // 悬浮球反馈: 新任务入队
         start(ctx);
         DownloadService s = instance;
         if (s != null) {
@@ -147,6 +148,13 @@ public class DownloadService extends Service {
     static int activeCount() {
         DownloadService s = instance;
         return s != null ? s.pending.get() : 0;
+    }
+
+    /** 通知悬浮球刷新 (角标+动效)。kind: pulse=新任务入队, tick=状态变化 */
+    static void notifyBall(String kind) {
+        try {
+            FloatBallService.onQueueChanged(kind);
+        } catch (Exception ignored) {}
     }
 
     // ---------------- 服务生命周期 ----------------
@@ -207,15 +215,23 @@ public class DownloadService extends Service {
     private void submitParse(String raw) {
         pending.incrementAndGet();
         promoteForeground(pending.get());
+        final String taskKey = keyOf(raw);
         exec.execute(() -> {
+            boolean allOk = true;
             try {
                 parseAndFanout(getApplicationContext(), raw);
             } catch (Exception e) {
+                allOk = false;
                 Log.e(TAG, "parse task fail: " + raw, e);
-                resultNotify(getApplicationContext(), "解析失败",
+                resultNotifyAutoRetry(getApplicationContext(), "解析失败",
                         raw.length() > 30 ? raw.substring(0, 30) : raw,
                         e.getMessage() != null ? e.getMessage() : String.valueOf(e));
             } finally {
+                if (!allOk) {
+                    // 失败: 清自动解析去重, 允许回前台/重复制重新触发
+                    getSharedPreferences("dydl", MODE_PRIVATE)
+                            .edit().remove("last_auto_key").apply();
+                }
                 taskDone();
             }
         });
@@ -238,6 +254,7 @@ public class DownloadService extends Service {
     }
 
     private void taskDone() {
+        notifyBall("tick");
         if (pending.decrementAndGet() <= 0) {
             synchronized (recentKeys) { recentKeys.clear(); }
             foreground = false;
@@ -757,7 +774,16 @@ public class DownloadService extends Service {
         } catch (Exception ignored) {}
     }
 
+    /** 失败通知专用: 语义别名 (失败时通知 intent 已带 auto_parse_clipboard) */
+    static void resultNotifyAutoRetry(Context app, String title, String name, String err) {
+        resultNotify(app, title, name, err);
+    }
+
     static void resultNotify(Context app, String title, String name, String err) {
+        boolean failed = err != null;
+        // 失败通知点击 → 回 App 前台并自动重读剪贴板重试 (解决"失败后无法重新下载")
+        Intent click = new Intent(app, MainActivity.class)
+                .putExtra("auto_parse_clipboard", failed);
         try {
             ensureChannel(app);
             NotificationManager nm = (NotificationManager) app.getSystemService(NOTIFICATION_SERVICE);
@@ -765,13 +791,13 @@ public class DownloadService extends Service {
             Notification.Builder b = Build.VERSION.SDK_INT >= 26
                     ? new Notification.Builder(app, CH_DL)
                     : new Notification.Builder(app);
-            b.setSmallIcon(err == null ? android.R.drawable.stat_sys_download_done
-                                       : android.R.drawable.stat_notify_error)
+            b.setSmallIcon(failed ? android.R.drawable.stat_notify_error
+                                  : android.R.drawable.stat_sys_download_done)
              .setContentTitle(title)
-             .setContentText(err == null ? name : name + " — " + err)
+             .setContentText(failed ? name + " — " + err : name)
              .setAutoCancel(true)
-             .setContentIntent(PendingIntent.getActivity(app, 0,
-                     new Intent(app, MainActivity.class),
+             .setContentIntent(PendingIntent.getActivity(app,
+                     (int) (System.currentTimeMillis() % 100000L), click,
                      PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
             nm.notify((int) (System.currentTimeMillis() % 100000000L), b.build());
         } catch (Exception ignored) {}

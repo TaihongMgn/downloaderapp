@@ -182,10 +182,12 @@ public class MainActivity extends Activity {
                 String key = DownloadService.keyOf(url);
                 android.content.SharedPreferences prefs =
                         getSharedPreferences("dydl", MODE_PRIVATE);
-                if (key.equals(prefs.getString("last_auto_key", ""))) {
-                    if (fromNotify) Toast.makeText(this, "该链接刚解析过", Toast.LENGTH_SHORT).show();
-                    return;
+                // fromNotify = 用户点了下载失败通知, 明确要求重试 → 绕过去重强制重下
+                boolean force = fromNotify;
+                if (!force && key.equals(prefs.getString("last_auto_key", ""))) {
+                    return;   // 静默: 同一链接已处理过(成功在册), 不重复解析
                 }
+                // 先记 key 防抖 (解析下载中不重复触发); 失败时 DownloadService 会清除
                 prefs.edit().putString("last_auto_key", key).apply();
                 DownloadService.enqueueParse(this, url);
                 Toast.makeText(this, "✓ 剪贴板发现抖音链接，已自动加入下载队列", Toast.LENGTH_LONG).show();
