@@ -563,6 +563,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     addr = ('127.0.0.1', int(os.environ.get('DYDL_PORT', '8788')))
     srv = ThreadingHTTPServer(addr, Handler)
+    srv.daemon_threads = True
     sys.stderr.write(f'dy-dl listening on {addr[0]}:{addr[1]}\n')
     srv.serve_forever()
 
