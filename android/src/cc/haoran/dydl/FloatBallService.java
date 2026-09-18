@@ -32,13 +32,18 @@ public class FloatBallService extends Service {
     private static volatile FloatBallService uiInstance = null;
     private static volatile String animState = "idle";   // idle | pulse | working
 
-    /** DownloadService 回调: 队列变化 (任意线程) */
+    /** DownloadService 回调: 队列变化 (任意线程)。kind 直接透传, 不经共享状态避免竞态 */
     static void onQueueChanged(String kind) {
-        if ("pulse".equals(kind)) animState = "pulse";
-        else if (uiInstance != null && uiInstance.pendingCount() > 0) animState = "working";
-        FloatBallService svc = uiInstance;
-        if (svc != null) svc.handler.post(() -> {
-            if ("pulse".equals(animState)) svc.playPulse();
+        final FloatBallService svc = uiInstance;
+        if (svc == null) return;
+        final String k = kind;
+        svc.handler.post(() -> {
+            if ("pulse".equals(k)) {
+                svc.playPulse();
+                animState = "working";   // 入队后立即进入工作态
+            } else if ("tick".equals(k)) {
+                animState = DownloadService.activeCount() > 0 ? "working" : "idle";
+            }
             svc.updateBadge();
         });
     }
