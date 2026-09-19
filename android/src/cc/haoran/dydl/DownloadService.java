@@ -295,6 +295,8 @@ public class DownloadService extends Service {
                     doDownload(app, imgs.getString(i), safeTitle + "_" + (i + 1) + ".jpg");
                 }
             }
+            // 注意: slideshow_video_urls 在移动端 Feed 中是音频 (M4A), 不是视频
+            // 实况 mp4 仅由 Web Detail API 提供, Argus 封锁期间不可用
         } else {
             // direct_urls 是对象 {video:[], audio:[]}, video[0] 恒为最高 H.264 档
             JSONObject du = info.optJSONObject("direct_urls");

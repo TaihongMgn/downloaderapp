@@ -313,6 +313,25 @@ class DouyinClient:
 DOUYIN_ID_RE = re.compile(r'(?:douyin\.com/(?:video/|note/)|iesdouyin\.com/share/(?:video|note)/|douyin\.com/share/(?:video|note)/|modal_id=)(\d{15,})')
 
 
+def mobile_feed_parse(aweme_id):
+    """移动端 Feed 通道: 免 Argus / 免 cookie / 免签名, 直出 JSON (~200ms)
+    伪装抖音 Android App 的 Cronet UA, 走 App 端推荐流协议"""
+    url = ('https://aweme.snssdk.com/aweme/v1/feed/?aweme_id=' + aweme_id +
+           '&aid=1128&version_code=290101&app_language=zh&channel=googleplay'
+           '&device_type=Pixel+4&os_version=10&device_brand=Google&device_model=Pixel+4'
+           '&device_platform=android&resolution=1080*1920&os_api=29&ssmix=a'
+           '&manifest_version_code=290101&aweme_type=0&openudid=null')
+    ua = ('com.ss.android.ugc.aweme/290101 (Linux; U; Android 10; zh_CN; Pixel 4; '
+          'Build/QQ3A.200805.001; Cronet/TTNetVersion:5f9037be 2023-01-13)')
+    req = urllib.request.Request(url, headers={'User-Agent': ua})
+    resp = urllib.request.urlopen(req, timeout=20)
+    data = json.loads(resp.read().decode())
+    al = data.get('aweme_list') or data.get('aweme_details') or []
+    if not al:
+        raise ValueError('移动端 Feed 无结果: ' + str(data.get('status_code', '')))
+    return al[0]
+
+
 def extract_douyin_id(raw):
     m = DOUYIN_ID_RE.search(raw)
     return m.group(1) if m else None
@@ -557,6 +576,13 @@ class Handler(BaseHTTPRequestHandler):
                 hit = _parse_cache.get(ck)
                 if hit and time.time() - hit[0] < PARSE_TTL:
                     return {**hit[1], 'cached': True}, ck
+            # 通道 1: 移动端 Feed (免 Argus / 免 cookie / 免签名, ~200ms)
+            try:
+                aweme = mobile_feed_parse(aweme_id)
+                return DouyinClient._normalize(aweme), ck
+            except Exception:
+                pass
+            # 通道 2: Web Detail API (需要签名+cookie)
             return DouyinClient.resolve_id(aweme_id), ck
         return ytdlp_json(url), f'u:{url}'
 
