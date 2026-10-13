@@ -356,7 +356,7 @@ final class XhsLocal {
     /** 状态取不到但嗅到了视频直链时, 拼一个最小的视频笔记结果。 */
     private static String sniffedVideoResult(String noteId, String videoUrl) {
         try {
-            JSONObject item = new JSONObject().put("master_url", videoUrl);
+            JSONObject item = new JSONObject().put("master_url", DownloadService.httpsify(videoUrl));
             JSONArray arr = new JSONArray().put(item);
             JSONObject stream = new JSONObject().put("h264", arr);
             JSONObject media = new JSONObject().put("stream", stream);
@@ -399,11 +399,11 @@ final class XhsLocal {
             if (item == null) continue;
             String img = pickImageUrl(item);
             if (img == null || img.isEmpty()) continue;
-            images.put(img);
+            images.put(DownloadService.httpsify(img));
             String live = pickVideo(item.optJSONObject("video"));
             if (live != null && !live.isEmpty()) {
                 hasLive = true;
-                lives.put(live);
+                lives.put(DownloadService.httpsify(live));
             } else {
                 lives.put(JSONObject.NULL);
             }
@@ -435,7 +435,7 @@ final class XhsLocal {
         r.put("is_image_post", isImagePost);
         JSONObject du = new JSONObject();
         JSONArray vids = new JSONArray();
-        if (videoUrl != null && !videoUrl.isEmpty()) vids.put(videoUrl);
+        if (videoUrl != null && !videoUrl.isEmpty()) vids.put(DownloadService.httpsify(videoUrl));
         du.put("video", vids);
         du.put("audio", new JSONArray());
         r.put("direct_urls", du);

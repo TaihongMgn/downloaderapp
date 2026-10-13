@@ -327,6 +327,14 @@ XHS_HEADERS = {
 XHS_ID_RE = re.compile(r'xiaohongshu\.com/(?:explore|discovery/item)/([0-9a-f]+)')
 
 
+def _httpsify(u):
+    """小红书 CDN 支持 https; 而 App 禁明文、网页在 https 下也会因混合内容被拦,
+    所以统一把 http 直链升级成 https。"""
+    if isinstance(u, str) and u.startswith('http://'):
+        return 'https://' + u[7:]
+    return u
+
+
 def xhs_extract_id(url):
     m = XHS_ID_RE.search(url)
     return m.group(1) if m else None
@@ -387,20 +395,21 @@ def xhs_parse(note_id, query_params=''):
         if not best:
             ul = im.get('url_list') or []
             best = ul[-1] if ul else ''
-        images.append(best)
+        images.append(_httpsify(best))
         lv = im.get('video') or {}
         lv_media = (lv.get('media') or {}).get('video_stream') or {}
         live_url = lv_media.get('master_url') or ''
         if not live_url:
             lvpa = (lv.get('play_addr') or {}).get('url_list') or []
             live_url = lvpa[0] if lvpa else ''
-        live_videos.append(live_url or None)
+        live_videos.append(_httpsify(live_url) or None)
 
     video_url = None
     video_data = note_data.get('video') or {}
     media = video_data.get('media') or {}
     stream = media.get('stream') or {}
-    for codec in ('h265', 'h264', 'av1', 'h266'):
+    # h264 优先: 部分手机放不了 HEVC/AV1, 与服务端本地解析侧保持一致
+    for codec in ('h264', 'h265', 'av1', 'h266'):
         streams = stream.get(codec) or []
         if streams:
             mu = streams[0].get('master_url') or ''
@@ -410,6 +419,7 @@ def xhs_parse(note_id, query_params=''):
     if not video_url:
         pa = (video_data.get('play_addr') or {}).get('url_list') or []
         video_url = pa[0] if pa else None
+    video_url = _httpsify(video_url)
 
     has_live = any(x for x in live_videos)
     is_img = bool(images) and not video_url

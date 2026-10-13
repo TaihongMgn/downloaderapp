@@ -445,7 +445,18 @@ public class DownloadService extends Service {
         return videoLen > 0 && videoLen <= data.length && indexOf(java.util.Arrays.copyOfRange(data, data.length-videoLen, data.length), "ftyp".getBytes()) >= 0;
     }
 
+    /** 小红书/抖音 CDN 都是 https 可用的, 而 App 全局禁明文 (usesCleartextTraffic=false):
+     *  http 直链会被系统直接拒 (报 "Cleartext HTTP traffic ... not permitted")。
+     *  统一升级成 https —— 升级后若仍不可用也不会比现状更差 (http 本来就连不上)。 */
+    static String httpsify(String url) {
+        if (url == null) return null;
+        String u = url.trim();
+        if (u.startsWith("http://")) return "https://" + u.substring(7);
+        return u;
+    }
+
     private static byte[] fetchBytes(String url) throws Exception {
+        url = httpsify(url);
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setConnectTimeout(15000);
         c.setReadTimeout(60000);
@@ -531,6 +542,7 @@ public class DownloadService extends Service {
     }
 
     private static void doDownload(Context app, String url, String name) {
+        url = httpsify(url);   // http 直链会被系统禁明文拒掉
         HttpURLConnection conn = null;
         boolean saved = false;
         String err = null;
