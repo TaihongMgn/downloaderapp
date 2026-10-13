@@ -53,16 +53,82 @@ final class XhsLocal {
     /** H.264 优先 (部分手机放不了 HEVC/AV1) */
     private static final String[] CODEC_ORDER = {"h264", "h265", "av1", "h266"};
 
-    /** 页面内取数脚本: 在 __INITIAL_STATE__ 等根对象上做 BFS, 命中目标笔记后只挑出需要的
-     *  字段返回 —— 不把整个 note 对象交出去, 免得状态里有循环引用/函数导致序列化抛错。
+    /** 页面内取数脚本: 在 __INITIAL_STATE__ 等根对象上做 BFS 找到目标笔记, 然后
+     *  在页面自己的 JS 里把「图 / 实况 / 视频」直接选好再返回。
+     *
+     *  实况字段位置在小红书历代版本里来回变 (livePhoto.media.stream / stream /
+     *  livePhotoVideo / liveUrl ...), 所以最后再对整张图的子树做一次扫描, 只要出现
+     *  像视频的链接就采用 —— 不再依赖具体字段名。
+     *
      *  返回对象而非字符串, 避免 evaluateJavascript 回调里的二次转义。 */
     private static final String EXTRACT_JS =
             "(function(){"
-            + "function trim(n){if(!n||typeof n!=='object')return null;"
-            + "var u=n.user||null;"
-            + "return {noteId:n.noteId,type:n.type,title:n.title,desc:n.desc,"
-            + "user:u?{nickname:u.nickname,nickName:u.nickName}:null,"
-            + "imageList:n.imageList,video:n.video};}"
+            + "function str(u){return (typeof u==='string'&&u.indexOf('http')===0)?u:'';}"
+            + "function pickStream(st){"
+            + "if(!st||typeof st!=='object')return '';"
+            + "var order=['h264','h265','av1','h266'],wm='';"
+            + "for(var ci=0;ci<order.length;ci++){var arr=st[order[ci]];if(!arr||!arr.length)continue;"
+            + "for(var i=0;i<arr.length;i++){var it=arr[i];if(!it)continue;"
+            + "var u=(typeof it==='string')?str(it):(str(it.masterUrl)||str(it.master_url)||str(it.url)"
+            + "||str((it.backupUrls||it.backup_urls||[])[0]));"
+            + "if(!u)continue;"
+            + "var bad=(it.streamType===259||it.streamType===309"
+            + "||String(it.streamDesc||'').toUpperCase()==='WEB_LIVEPHOTO_19');"
+            + "if(bad){if(!wm)wm=u;}else{return u;}}}"
+            + "return wm;}"
+            + "function originUrl(v){"
+            + "if(!v||typeof v!=='object')return '';"
+            + "var k=(v.consumer&&v.consumer.originVideoKey)||v.originVideoKey;"
+            + "if(typeof k!=='string'||!k)return '';"
+            + "return k.indexOf('http')===0?k:('https://sns-video-bd.xhscdn.com/'+k.replace(/^\\//,''));}"
+            + "function sweep(root){"
+            + "var seen=new Set(),q=[root],n=0;"
+            + "while(q.length&&n++<4000){var v=q.shift();"
+            + "if(!v||typeof v!=='object')continue;"
+            + "if(seen.has(v))continue;seen.add(v);"
+            + "for(var k in v){var c=v[k];"
+            + "if(typeof c==='string'){"
+            + "if(c.indexOf('http')===0&&(c.indexOf('sns-video')>=0||c.indexOf('sns-vod')>=0"
+            + "||/\\.mp4(\\?|$)/.test(c)))return c;}"
+            + "else if(c&&typeof c==='object'){q.push(c);}}}"
+            + "return '';}"
+            + "function liveOf(it){"
+            + "if(!it||typeof it!=='object')return '';"
+            + "var u=pickStream(it.livePhoto&&it.livePhoto.media&&it.livePhoto.media.stream)"
+            + "||pickStream(it.livePhoto&&it.livePhoto.stream)"
+            + "||pickStream(it.stream)"
+            + "||str(it.livePhotoVideo)||str(it.liveUrl)"
+            + "||originUrl(it.livePhoto)||originUrl(it);"
+            + "if(u)return u;"
+            + "return sweep(it);}"
+            + "function imgOf(it){"
+            + "if(!it||typeof it!=='object')return '';"
+            + "var d=str(it.urlDefault);if(d)return d;"
+            + "var il=it.infoList||[],any='';"
+            + "for(var i=0;i<il.length;i++){var o=il[i]||{};var s=str(o.url);if(!s)continue;"
+            + "if(String(o.imageScene||'').toUpperCase()==='WB_DFT')return s;if(!any)any=s;}"
+            + "if(any)return any;"
+            + "var u=str(it.url);if(u)return u;"
+            + "var ul=it.url_list||[],last='';"
+            + "for(var j=0;j<ul.length;j++){var s2=str(ul[j]);if(s2)last=s2;}"
+            + "if(last)return last;"
+            + "if(it.traceId)return 'https://sns-img-qc.xhscdn.com/'+it.traceId;"
+            + "return '';}"
+            + "function build(note){"
+            + "var il=note.imageList||note.images||[];"
+            + "var media=[],live=0;"
+            + "for(var i=0;i<il.length;i++){var it=il[i];var img=imgOf(it);if(!img)continue;"
+            + "var lv=liveOf(it);if(lv)live++;media.push({img:img,live:lv});}"
+            + "var v=note.video||null;"
+            + "var vurl=pickStream(v&&v.media&&v.media.stream)||pickStream(v&&v.video_stream)"
+            + "||pickStream(v&&v.stream)||originUrl(v)||'';"
+            + "var u0=note.user||{};"
+            + "var k0=il.length&&il[0]&&typeof il[0]==='object'?Object.keys(il[0]).join(','):'-';"
+            + "var lp0=il.length&&il[0]&&il[0].livePhoto?'lp:'+Object.keys(il[0].livePhoto).join(','):'lp:-';"
+            + "var st0=il.length&&il[0]&&il[0].stream?'st:'+Object.keys(il[0].stream).join(','):'st:-';"
+            + "return {media:media,video:vurl,title:note.title||note.desc||'',"
+            + "author:u0.nickname||u0.nickName||'',"
+            + "diag:'n='+il.length+';live='+live+';k0='+k0+';'+lp0+';'+st0};}"
             + "var m=location.pathname.match(/\\/(?:explore|discovery\\/item|item)\\/([0-9a-fA-F]{24})/);"
             + "var want=m?m[1]:null;"
             + "if(!want)return {error:'unsupported_page'};"
@@ -77,16 +143,16 @@ final class XhsLocal {
             + "if(v.noteDetailMap&&v.noteDetailMap[want]&&v.noteDetailMap[want].note){"
             + "var d=v.noteDetailMap[want];"
             + "if(!d.note.noteId||d.note.noteId===want)"
-            + "return {note:trim(d.note),url:location.href};}"
+            + "return {note:build(d.note),noteId:d.note.noteId||want,url:location.href};}"
             + "if(v.noteData&&v.noteData.data&&v.noteData.data.noteData"
             + "&&v.noteData.data.noteData.noteId===want)"
-            + "return {note:trim(v.noteData.data.noteData),url:location.href};"
+            + "return {note:build(v.noteData.data.noteData),noteId:want,url:location.href};"
             + "if(v.noteId===want&&(v.imageList||v.video||v.desc!==undefined))"
-            + "return {note:trim(v),url:location.href};"
+            + "return {note:build(v),noteId:want,url:location.href};"
             + "for(var k in v){try{var c=v[k];if(c&&typeof c==='object')queue.push(c);}catch(e){}}"
             + "}"
             + "return {error:'note_state_unavailable'};"
-            + "})();";;
+            + "})();";;;
 
     /** 页面首帧后轮询取数的次数与间隔 (页面可能异步注水) */
     private static final int POLL_TRIES = 6;
@@ -388,42 +454,70 @@ final class XhsLocal {
         JSONObject note = payload.optJSONObject("note");
         if (note == null) throw new Exception("小红书笔记数据为空");
 
-        String id = note.optString("noteId", "");
-        if (id == null || id.isEmpty()) id = fallbackId == null ? "" : fallbackId;
-
-        JSONArray imageList = note.optJSONArray("imageList");
-        if (imageList == null) imageList = note.optJSONArray("images");
+        String id = payload.optString("noteId", "");
+        if (id.isEmpty()) id = note.optString("noteId", "");
+        if (id.isEmpty()) id = fallbackId == null ? "" : fallbackId;
 
         JSONArray images = new JSONArray();
         JSONArray lives = new JSONArray();
         boolean hasLive = false;
-        for (int i = 0; imageList != null && i < imageList.length(); i++) {
-            JSONObject item = imageList.optJSONObject(i);
-            if (item == null) continue;
-            String img = pickImageUrl(item);
-            if (img == null || img.isEmpty()) continue;
-            images.put(DownloadService.httpsify(img));
-            String live = pickLiveVideo(item);
-            if (live != null && !live.isEmpty()) {
-                hasLive = true;
-                lives.put(DownloadService.httpsify(live));
-            } else {
-                lives.put(JSONObject.NULL);
+
+        JSONArray media = note.optJSONArray("media");
+        if (media != null) {
+            // 首选: 页面内 JS 已经按历代字段位置 + 子树扫描选好的 [图, 实况] 对
+            for (int i = 0; i < media.length(); i++) {
+                JSONObject m = media.optJSONObject(i);
+                if (m == null) continue;
+                String img = m.optString("img", "");
+                if (img.isEmpty()) continue;
+                images.put(DownloadService.httpsify(img));
+                String lv = m.optString("live", "");
+                if (lv.isEmpty()) {
+                    lives.put(JSONObject.NULL);
+                } else {
+                    hasLive = true;
+                    lives.put(DownloadService.httpsify(lv));
+                }
+            }
+        } else {
+            // 兜底: 老结构 (payload 里没有 media 时)
+            JSONArray imageList = note.optJSONArray("imageList");
+            if (imageList == null) imageList = note.optJSONArray("images");
+            for (int i = 0; imageList != null && i < imageList.length(); i++) {
+                JSONObject item = imageList.optJSONObject(i);
+                if (item == null) continue;
+                String img = pickImageUrl(item);
+                if (img == null || img.isEmpty()) continue;
+                images.put(DownloadService.httpsify(img));
+                String live = pickLiveVideo(item);
+                if (live != null && !live.isEmpty()) {
+                    hasLive = true;
+                    lives.put(DownloadService.httpsify(live));
+                } else {
+                    lives.put(JSONObject.NULL);
+                }
             }
         }
 
-        String videoUrl = pickVideo(note.optJSONObject("video"));
+        String videoUrl = note.optString("video", "");
+        if (videoUrl.isEmpty()) videoUrl = pickVideo(note.optJSONObject("video"));
 
         String title = note.optString("title", "");
-        if (title == null || title.isEmpty()) title = note.optString("desc", "");
-        String author = "";
-        JSONObject user = note.optJSONObject("user");
-        if (user != null) {
-            author = user.optString("nickname", "");
-            if (author.isEmpty()) author = user.optString("nickName", "");
+        if (title.isEmpty()) title = note.optString("desc", "");
+        String author = note.optString("author", "");
+        if (author.isEmpty()) {
+            JSONObject user = note.optJSONObject("user");
+            if (user != null) {
+                author = user.optString("nickname", "");
+                if (author.isEmpty()) author = user.optString("nickName", "");
+            }
         }
 
         boolean isImagePost = images.length() > 0 && (videoUrl == null || videoUrl.isEmpty());
+        if (images.length() == 0 && (videoUrl == null || videoUrl.isEmpty())) {
+            throw new Exception("小红书笔记没有可下载的媒体"
+                    + (note.optString("diag", "").isEmpty() ? "" : " [" + note.optString("diag") + "]"));
+        }
 
         JSONObject r = new JSONObject();
         r.put("source", "xhs");
@@ -442,6 +536,8 @@ final class XhsLocal {
         du.put("video", vids);
         du.put("audio", new JSONArray());
         r.put("direct_urls", du);
+        // 字段清单: 便于排查"实况取不到"时到底页面里有什么 (设置里开关控制是否提示)
+        r.put("_diag", note.optString("diag", ""));
         return r;
     }
 

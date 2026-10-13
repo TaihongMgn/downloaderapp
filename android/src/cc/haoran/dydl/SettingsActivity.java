@@ -25,6 +25,7 @@ public class SettingsActivity extends Activity {
     private LinearLayout clipSub;
     private TextView a11yState;
     private TextView xhsState;
+    private Switch xhsDiagSwitch;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -147,6 +148,19 @@ public class SettingsActivity extends Activity {
             }
         });
         root.addView(rowXhs, rowParams());
+
+        // 排查用: 解析小红书后把页面里实际存在的字段发到通知
+        LinearLayout rowDiag = clickableRow();
+        rowDiag.addView(col("小红书解析诊断", "解析后把字段清单发到通知 (排查实况等取不到时用)"));
+        xhsDiagSwitch = new Switch(this);
+        xhsDiagSwitch.setClickable(false);
+        rowDiag.addView(xhsDiagSwitch, new LinearLayout.LayoutParams(-2, -2));
+        rowDiag.setOnClickListener(v -> {
+            boolean want = !prefs.getBoolean("xhs_diag", false);
+            prefs.edit().putBoolean("xhs_diag", want).apply();
+            refresh();
+        });
+        root.addView(rowDiag, rowParams());
 
         root.addView(section("下载"));
         root.addView(infoRow("保存位置", "DCIM/Hrdl（音频 Music/Hrdl）"));
@@ -274,6 +288,7 @@ public class SettingsActivity extends Activity {
             xhsState.setText(logged ? "✓ 已登录" : "未登录");
             xhsState.setTextColor(Color.parseColor(logged ? "#7fd1a0" : "#9aa3b2"));
         }
+        if (xhsDiagSwitch != null) xhsDiagSwitch.setChecked(prefs.getBoolean("xhs_diag", false));
     }
 
     /** 打开 ROM 自启动管理页 (各家不同, 逐个尝试常见入口) */

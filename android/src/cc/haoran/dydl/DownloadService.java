@@ -324,6 +324,12 @@ public class DownloadService extends Service {
     /** 已解析结果 → 逐条下载。抖音与小红书共用。
      *  读字段: title / is_image_post / images[] / live_videos[](与 images 对齐) / direct_urls.video[0] */
     static void fanout(Context app, JSONObject info) throws Exception {
+        // 诊断开关打开时, 把小红书页面里实际有哪些字段发到通知 (排查"实况取不到")
+        String diag = info.optString("_diag", "");
+        if (!diag.isEmpty() && app.getSharedPreferences("dydl", Context.MODE_PRIVATE)
+                .getBoolean("xhs_diag", false)) {
+            resultNotify(app, "小红书解析诊断", diag, null);
+        }
         String title = info.optString("title", "video");
         String safeTitle = sanitize(title.isEmpty() ? "video" : title);
         if (info.optBoolean("is_image_post")) {
