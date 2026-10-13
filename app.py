@@ -32,6 +32,20 @@ UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36')
 
 PARSE_TTL = 600          # 解析结果缓存 10 分钟
+
+# 非 App 浏览器访问首页时的提示 (前端只对 App 内置 WebView 提供)
+APP_ONLY_NOTICE = (
+    '<!doctype html><meta charset="utf-8">'
+    '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    '<title>请使用 App 打开</title>'
+    '<div style="font-family:system-ui,sans-serif;background:#0f1115;color:#e8eaf0;'
+    'min-height:100vh;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px">'
+    '<div><div style="font-size:18px;margin-bottom:8px">请使用 App 打开</div>'
+    '<div style="color:#9aa3b2;font-size:13px;line-height:1.7">'
+    '本页面是 App 的界面，需要 App 内置环境才能使用。<br>'
+    '网页版无法解析：抖音需要 cookie，小红书依赖手机本地登录态。</div></div></div>'
+).encode('utf-8')
+
 PARSE_TIMEOUT = 60       # yt-dlp -J 超时
 RATE_LIMIT = (12, 300)   # 每 IP 每 300 秒最多 12 次解析
 _parse_cache = {}
@@ -614,6 +628,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {'error': 'not found'})
 
     def _serve_index(self):
+        # 前端只对 App 内置 WebView 提供 (其 UA 带 DyDlApp 后缀, 见 MainActivity)。
+        # 这个页面是 App 的主界面 —— 对普通浏览器它没有意义 (抖音要 cookie、小红书走手机本地解析)。
+        ua = self.headers.get('User-Agent') or ''
+        if 'DyDlApp' not in ua:
+            self._send(403, APP_ONLY_NOTICE, 'text/html; charset=utf-8', {'Cache-Control': 'no-store'})
+            return
         try:
             with open(os.path.join(BASE_DIR, 'static', 'index.html'), 'rb') as f:
                 self._send(200, f.read(), 'text/html; charset=utf-8')
