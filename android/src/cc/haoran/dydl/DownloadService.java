@@ -223,9 +223,14 @@ public class DownloadService extends Service {
             } catch (Exception e) {
                 allOk = false;
                 Log.e(TAG, "parse task fail: " + raw, e);
-                resultNotifyAutoRetry(getApplicationContext(), "解析失败",
-                        raw.length() > 30 ? raw.substring(0, 30) : raw,
-                        e.getMessage() != null ? e.getMessage() : String.valueOf(e));
+                String msg = e.getMessage() != null ? e.getMessage() : String.valueOf(e);
+                String shortRaw = raw.length() > 30 ? raw.substring(0, 30) : raw;
+                if (msg.contains("需要先登录")) {
+                    // 可操作: 点通知直接去登录, 不用自己找设置
+                    resultNotifyLogin(getApplicationContext(), shortRaw, msg);
+                } else {
+                    resultNotifyAutoRetry(getApplicationContext(), "解析失败", shortRaw, msg);
+                }
             } finally {
                 if (!allOk) {
                     // 失败: 清自动解析去重, 允许回前台/重复制重新触发
@@ -273,19 +278,37 @@ public class DownloadService extends Service {
     private static void parseAndFanout(Context app, String raw) throws Exception {
         String firstUrl = extractFirstUrl(raw);
         if (firstUrl == null) throw new Exception("文本中没有链接");
-        JSONObject info;
-        if (XhsLocal.isXhs(firstUrl)) {
-            try {
-                info = XhsLocal.parse(app, raw);
-            } catch (Exception localErr) {
-                // 本地取不到 (未登录/风控/页面结构变化) 时回退服务端, 最坏与改造前持平
-                Log.d(TAG, "xhs local parse failed, fallback to server: " + localErr.getMessage());
-                info = serverParse(app, raw);
-            }
-        } else {
-            info = serverParse(app, raw);
+        if (!XhsLocal.isXhs(firstUrl)) {
+            JSONObject info = serverParse(app, raw);
+            if (info.has("error")) throw new Exception(info.optString("error", "解析失败"));
+            fanout(app, info);
+            return;
         }
-        if (info.has("error")) throw new Exception(info.optString("error", "解析失败"));
+        JSONObject info = null;
+        Exception localErr = null;
+        try {
+            info = XhsLocal.parse(app, raw);
+        } catch (Exception e) {
+            localErr = e;
+            Log.d(TAG, "xhs local parse failed: " + e.getMessage());
+        }
+        if (info == null) {
+            // 回退服务端; 但失败时把本地原因一并带出 —— 否则真因会被服务端那句无关报错盖掉
+            String localMsg = (localErr == null || localErr.getMessage() == null)
+                    ? "未知" : localErr.getMessage();
+            JSONObject sv;
+            try {
+                sv = serverParse(app, raw);
+            } catch (Exception se) {
+                throw new Exception("小红书解析失败 — 本地: " + localMsg
+                        + " / 服务端: " + se.getMessage());
+            }
+            if (sv.has("error")) {
+                throw new Exception("小红书解析失败 — 本地: " + localMsg
+                        + " / 服务端: " + sv.optString("error"));
+            }
+            info = sv;
+        }
         fanout(app, info);
     }
 
@@ -830,6 +853,28 @@ public class DownloadService extends Service {
                                   : android.R.drawable.stat_sys_download_done)
              .setContentTitle(title)
              .setContentText(failed ? name + " — " + err : name)
+             .setAutoCancel(true)
+             .setContentIntent(PendingIntent.getActivity(app,
+                     (int) (System.currentTimeMillis() % 100000L), click,
+                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
+            nm.notify((int) (System.currentTimeMillis() % 100000000L), b.build());
+        } catch (Exception ignored) {}
+    }
+
+    /** 需要登录类失败的专用通知: 点击直接打开小红书登录页, 少绕一步设置。 */
+    static void resultNotifyLogin(Context app, String name, String err) {
+        Intent click = new Intent(app, XhsLoginActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            ensureChannel(app);
+            NotificationManager nm = (NotificationManager) app.getSystemService(NOTIFICATION_SERVICE);
+            if (nm == null) return;
+            Notification.Builder b = Build.VERSION.SDK_INT >= 26
+                    ? new Notification.Builder(app, CH_DL)
+                    : new Notification.Builder(app);
+            b.setSmallIcon(android.R.drawable.stat_notify_error)
+             .setContentTitle("小红书需要先登录")
+             .setContentText(err)
              .setAutoCancel(true)
              .setContentIntent(PendingIntent.getActivity(app,
                      (int) (System.currentTimeMillis() % 100000L), click,

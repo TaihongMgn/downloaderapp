@@ -1,9 +1,16 @@
 package cc.haoran.dydl;
 
 import android.content.Context;
+import android.graphics.PixelFormat;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
+import android.view.Gravity;
+import android.view.WindowManager;
 import android.webkit.CookieManager;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -13,6 +20,9 @@ import org.json.JSONObject;
 
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
@@ -40,10 +50,16 @@ final class XhsLocal {
     private static final String[] XHS_HOSTS =
             {"xiaohongshu.com", "rednote.com", "xhslink.com", "xhslink.cn"};
 
-    /** 页面内取数脚本: 在 __INITIAL_STATE__ 等根对象上做 BFS, 命中目标笔记后原样交回。
+    /** 页面内取数脚本: 在 __INITIAL_STATE__ 等根对象上做 BFS, 命中目标笔记后只挑出需要的
+     *  字段返回 —— 不把整个 note 对象交出去, 免得状态里有循环引用/函数导致序列化抛错。
      *  返回对象而非字符串, 避免 evaluateJavascript 回调里的二次转义。 */
     private static final String EXTRACT_JS =
             "(function(){"
+            + "function trim(n){if(!n||typeof n!=='object')return null;"
+            + "var u=n.user||null;"
+            + "return {noteId:n.noteId,type:n.type,title:n.title,desc:n.desc,"
+            + "user:u?{nickname:u.nickname,nickName:u.nickName}:null,"
+            + "imageList:n.imageList,video:n.video};}"
             + "var m=location.pathname.match(/\\/(?:explore|discovery\\/item|item)\\/([0-9a-fA-F]{24})/);"
             + "var want=m?m[1]:null;"
             + "if(!want)return {error:'unsupported_page'};"
@@ -58,16 +74,21 @@ final class XhsLocal {
             + "if(v.noteDetailMap&&v.noteDetailMap[want]&&v.noteDetailMap[want].note){"
             + "var d=v.noteDetailMap[want];"
             + "if(!d.note.noteId||d.note.noteId===want)"
-            + "return {note:d.note,comments:d.comments||null,url:location.href};}"
+            + "return {note:trim(d.note),url:location.href};}"
             + "if(v.noteData&&v.noteData.data&&v.noteData.data.noteData"
             + "&&v.noteData.data.noteData.noteId===want)"
-            + "return {note:v.noteData.data.noteData,comments:v.noteData.data.commentData||null,url:location.href};"
+            + "return {note:trim(v.noteData.data.noteData),url:location.href};"
             + "if(v.noteId===want&&(v.imageList||v.video||v.desc!==undefined))"
-            + "return {note:v,url:location.href};"
+            + "return {note:trim(v),url:location.href};"
             + "for(var k in v){try{var c=v[k];if(c&&typeof c==='object')queue.push(c);}catch(e){}}"
             + "}"
             + "return {error:'note_state_unavailable'};"
-            + "})();";
+            + "})();";;
+
+    /** 页面首帧后轮询取数的次数与间隔 (页面可能异步注水) */
+    private static final int POLL_TRIES = 6;
+    private static final long POLL_GAP_MS = 1500;
+    private static final long TOTAL_TIMEOUT_S = 45;
 
     private XhsLocal() {}
 
@@ -87,7 +108,7 @@ final class XhsLocal {
         return m.find() ? m.group(1) : null;
     }
 
-    /** 是否已有小红书登录会话 (供设置页显示状态)。 */
+    /** 是否已有小红书登录会话 (供设置页显示状态 / 失败时给出可操作提示)。 */
     static boolean hasSession(Context ctx) {
         try {
             String c = CookieManager.getInstance().getCookie("https://www.xiaohongshu.com");
@@ -105,7 +126,7 @@ final class XhsLocal {
         if (url == null) throw new Exception("文本中没有链接");
         if (!isXhs(url)) throw new Exception("不是小红书链接");
 
-        // 短链展开: 失败也无妨, WebView 自己会跟着跳转
+        // 短链展开: 失败也无妨, WebView 自己会跟着跳转 (顺带保留 xsec_token 等 query)
         String page = resolveShortLink(url);
         String id = noteId(page);
         if (id == null) id = noteId(url);
@@ -126,6 +147,8 @@ final class XhsLocal {
             c.setConnectTimeout(12000);
             c.setReadTimeout(12000);
             c.setRequestProperty("User-Agent", DESKTOP_UA);
+            String cookie = CookieManager.getInstance().getCookie("https://www.xiaohongshu.com");
+            if (cookie != null && !cookie.isEmpty()) c.setRequestProperty("Cookie", cookie);
             int code = c.getResponseCode();
             String finalUrl = c.getURL() == null ? null : c.getURL().toString();
             if (code >= 200 && code < 400 && finalUrl != null && finalUrl.contains("xiaohongshu.com")) {
@@ -144,9 +167,14 @@ final class XhsLocal {
             throws Exception {
         final String[] out = new String[1];
         final String[] err = new String[1];
+        final String[] finalUrl = new String[1];
+        final boolean[] attached = {false};
         final CountDownLatch latch = new CountDownLatch(1);
         final Handler main = new Handler(Looper.getMainLooper());
         final WebView[] holder = new WebView[1];
+        final int[] overlayType = {0};
+        // 旁听网络: 视频笔记即使状态取不到, 嗅到 CDN 直链也能兜底下载
+        final Set<String> sniffed = Collections.synchronizedSet(new LinkedHashSet<String>());
 
         main.post(() -> {
             try {
@@ -163,65 +191,183 @@ final class XhsLocal {
                 cm.setAcceptCookie(true);
                 cm.setAcceptThirdPartyCookies(wv, true);
 
-                final boolean[] fired = {false};
                 wv.setWebViewClient(new WebViewClient() {
                     @Override
-                    public void onPageFinished(WebView view, String u) {
-                        if (fired[0]) return;
-                        fired[0] = true;
-                        if (u != null && u.contains("/login")) {
-                            err[0] = "小红书需要先登录 (设置 → 小红书登录)";
-                            latch.countDown();
-                            return;
-                        }
-                        // 首帧后再等一会, 确保页面把 __INITIAL_STATE__ 填好
-                        main.postDelayed(() -> {
-                            try {
-                                view.evaluateJavascript(EXTRACT_JS, value -> {
-                                    out[0] = value;
-                                    latch.countDown();
-                                });
-                            } catch (Throwable t) {
-                                err[0] = "小红书页面脚本执行失败: " + t.getMessage();
-                                latch.countDown();
+                    public WebResourceResponse shouldInterceptRequest(WebView view,
+                                                                     WebResourceRequest req) {
+                        try {
+                            String u = req.getUrl() == null ? null : req.getUrl().toString();
+                            if (u != null && u.contains("xhscdn") && u.contains("sns-video")) {
+                                sniffed.add(u);
                             }
-                        }, 1200);
+                        } catch (Exception ignored) {}
+                        return null;   // 只旁听, 不拦截
+                    }
+
+                    @Override
+                    public void onPageFinished(WebView view, String u) {
+                        finalUrl[0] = u;
+                        startPolling(view, main, latch, out, err, noteId, sniffed);
                     }
                 });
+
+                // 挂到窗口上, 避免后台 WebView 被降频导致 JS 不执行/页面不注水
+                attached[0] = tryAttach(ctx, wv, overlayType);
                 wv.loadUrl(pageUrl);
             } catch (Throwable t) {
-                err[0] = "小红书解析初始化失败: " + t.getMessage();
+                err[0] = "小红书解析初始化失败[" + t + "]";
                 latch.countDown();
             }
         });
 
         boolean ok;
         try {
-            ok = latch.await(35, TimeUnit.SECONDS);
+            ok = latch.await(TOTAL_TIMEOUT_S, TimeUnit.SECONDS);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             ok = false;
         }
+        final int ot = overlayType[0];
+        final WebView wvFinal = holder[0];
+        final boolean attFinal = attached[0];
         main.post(() -> {
             try {
-                if (holder[0] != null) {
-                    holder[0].stopLoading();
-                    holder[0].destroy();
+                if (wvFinal != null) {
+                    if (attFinal) {
+                        try {
+                            ((WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE)).removeView(wvFinal);
+                        } catch (Exception ignored) {}
+                    }
+                    wvFinal.stopLoading();
+                    wvFinal.destroy();
                 }
+                if (ot != 0) { /* 仅用于类型选择的记录, 无副作用 */ }
             } catch (Exception ignored) {
             }
         });
 
-        if (!ok) throw new Exception("小红书解析超时, 请检查网络后重试");
+        if (!ok) {
+            throw new Exception("小红书解析超时[" + (attFinal ? "已挂载" : "未挂载") + "], 请检查网络后重试");
+        }
         if (err[0] != null) throw new Exception(err[0]);
         String raw = out[0];
         if (raw == null || raw.isEmpty() || "null".equals(raw)) {
-            throw new Exception("小红书页面没有返回数据 (笔记可能已删除或受限)");
+            throw new Exception(noDataReason(ctx, finalUrl[0], attFinal));
         }
         try {
             return new JSONObject(raw);
         } catch (Exception e) {
             throw new Exception("小红书数据解析失败: " + e.getMessage());
+        }
+    }
+
+    /** 页面首帧后反复尝试取数: 有的笔记是异步注水的, 一次取不到不代表没有。 */
+    private static void startPolling(final WebView view, final Handler main,
+                                     final CountDownLatch latch, final String[] out,
+                                     final String[] err, final String noteId,
+                                     final Set<String> sniffed) {
+        final int[] attempt = {0};
+        final boolean[] finished = {false};
+        final Runnable[] step = new Runnable[1];
+        step[0] = () -> {
+            if (finished[0]) return;
+            if (attempt[0]++ >= POLL_TRIES) {
+                finished[0] = true;
+                String v = firstSniffedVideo(sniffed);
+                if (v != null) {
+                    out[0] = sniffedVideoResult(noteId, v);
+                } else if (err[0] == null) {
+                    err[0] = "";   // 交给外层按登录态/最终 URL 生成可操作提示
+                }
+                latch.countDown();
+                return;
+            }
+            try {
+                view.evaluateJavascript(EXTRACT_JS, value -> {
+                    if (finished[0]) return;
+                    try {
+                        if (value != null && !value.isEmpty() && !"null".equals(value)) {
+                            JSONObject o = new JSONObject(value);
+                            if (o.has("note")) {
+                                finished[0] = true;
+                                out[0] = value;
+                                latch.countDown();
+                                return;
+                            }
+                            if ("unsupported_page".equals(o.optString("error", ""))) {
+                                finished[0] = true;
+                                err[0] = "无法从小红书链接中识别出笔记 ID";
+                                latch.countDown();
+                                return;
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                    main.postDelayed(step[0], POLL_GAP_MS);
+                });
+            } catch (Throwable t) {
+                if (!finished[0]) {
+                    finished[0] = true;
+                    err[0] = "小红书脚本注入失败[" + t + "]";
+                    latch.countDown();
+                }
+            }
+        };
+        step[0].run();
+    }
+
+    /** 没有拿到笔记数据时, 依据登录态与最终 URL 给出最可操作的提示。 */
+    private static String noDataReason(Context ctx, String finalUrl, boolean attached) {
+        boolean loginPage = finalUrl != null && finalUrl.contains("/login");
+        if (loginPage || !hasSession(ctx)) {
+            return "小红书需要先登录 (设置 → 小红书账号登录)";
+        }
+        return "小红书页面取不到笔记数据[" + (attached ? "已挂载" : "未挂载")
+                + "] (可能被风控或笔记受限)";
+    }
+
+    /** 把 WebView 挂成 1x1 隐形窗口: 避免后台被降频。无悬浮窗权限时退回不挂载。 */
+    private static boolean tryAttach(Context ctx, WebView wv, int[] typeOut) {
+        try {
+            if (!Settings.canDrawOverlays(ctx)) return false;
+            int type = (Build.VERSION.SDK_INT >= 26)
+                    ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    : WindowManager.LayoutParams.TYPE_PHONE;
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                    1, 1, type,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                    PixelFormat.TRANSLUCENT);
+            lp.gravity = Gravity.START | Gravity.TOP;
+            ((WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE)).addView(wv, lp);
+            typeOut[0] = type;
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static String firstSniffedVideo(Set<String> sniffed) {
+        synchronized (sniffed) {
+            for (String u : sniffed) if (u != null && !u.isEmpty()) return u;
+        }
+        return null;
+    }
+
+    /** 状态取不到但嗅到了视频直链时, 拼一个最小的视频笔记结果。 */
+    private static String sniffedVideoResult(String noteId, String videoUrl) {
+        try {
+            JSONObject item = new JSONObject().put("master_url", videoUrl);
+            JSONArray arr = new JSONArray().put(item);
+            JSONObject stream = new JSONObject().put("h264", arr);
+            JSONObject media = new JSONObject().put("stream", stream);
+            JSONObject video = new JSONObject().put("media", media);
+            JSONObject note = new JSONObject()
+                    .put("noteId", noteId == null ? "" : noteId)
+                    .put("type", "video")
+                    .put("video", video);
+            return new JSONObject().put("note", note).toString();
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -254,7 +400,7 @@ final class XhsLocal {
             String img = pickImageUrl(item);
             if (img == null || img.isEmpty()) continue;
             images.put(img);
-            String live = pickLiveVideo(item);
+            String live = pickVideo(item.optJSONObject("video"));
             if (live != null && !live.isEmpty()) {
                 hasLive = true;
                 lives.put(live);
@@ -312,14 +458,6 @@ final class XhsLocal {
         String u2 = item.optString("url", "");
         if (!u2.isEmpty()) return u2;
         return lastInUrlList(item.optJSONArray("url_list"));
-    }
-
-    /** 实况照片的视频部分: video.media.video_stream.master_url > media.stream > play_addr。 */
-    private static String pickLiveVideo(JSONObject item) {
-        JSONObject v = item.optJSONObject("video");
-        if (v == null) return null;
-        String u = pickVideo(v);
-        return u;
     }
 
     /** 视频直链: 优先 H.264 (手机兼容), 再 h265/av1/h266; 最后回退 play_addr。 */

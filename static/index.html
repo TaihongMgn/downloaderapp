@@ -403,18 +403,24 @@ let dlHintShown = false;
 /* 单条解析: 小红书在 App 内走本地解析 (复用本机登录态, 不经服务器), 其余走服务端。
    本地失败时回退服务端, 最坏与改造前持平。 */
 async function parseOne(item) {
+  let localErr = null;
   if (XHS_LINK_RE.test(item.raw) && window.AndroidDyDl && typeof AndroidDyDl.parseLocal === 'function') {
     try {
       const data = JSON.parse(AndroidDyDl.parseLocal(item.raw));
       if (data && !data.error) return data;
-    } catch (e) { /* 回退服务端 */ }
+      localErr = (data && data.error) || '本地解析无结果';
+    } catch (e) { localErr = String((e && e.message) || e); }
   }
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 90000);   // 单条解析 90s 超时, 防队列卡死
   try {
     const resp = await fetch('/api/parse?url=' + encodeURIComponent(item.raw), { signal: ctl.signal });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+    if (!resp.ok) {
+      const svErr = data.error || ('HTTP ' + resp.status);
+      // 本地失败后回退服务端也失败时, 两个原因都带上, 否则真因被盖掉
+      throw new Error(localErr ? `小红书解析失败 — 本地: ${localErr} / 服务端: ${svErr}` : svErr);
+    }
     return data;
   } finally { clearTimeout(timer); }
 }
