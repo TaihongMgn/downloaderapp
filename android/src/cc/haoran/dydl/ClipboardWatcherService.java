@@ -77,7 +77,9 @@ public class ClipboardWatcherService extends AccessibilityService {
         long now = System.currentTimeMillis();
 
         boolean trigger = etext.contains("复制") || etext.contains("拷贝");
-        boolean sweep = pkg.contains("douyin") || pkg.contains("ss.android");
+        // 前台静默扫描兜底: 抖音与小红书 App 在前台时周期性读一次剪贴板
+        boolean sweep = pkg.contains("douyin") || pkg.contains("ss.android")
+                || pkg.contains("xingin") || pkg.contains("xiaohongshu");
 
         if (trigger && now - lastReadAt >= READ_COOLDOWN_MS) {
             lastReadAt = now;
@@ -133,7 +135,8 @@ public class ClipboardWatcherService extends AccessibilityService {
         try {
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_LAST_FP, fp).apply();
         } catch (Exception ignored) {}
-        if (!text.contains("douyin.com") && !text.contains("iesdouyin.com")) return;
+        // 平台不限: 抖音链接走服务端解析, 小红书链接走 App 本地解析 (DownloadService 内分流)
+        if (!DownloadService.isSupportedUrl(DownloadService.extractFirstUrl(text))) return;
         // 静默扫描只是兜底 (复制事件的窗口文本未必抓得到): 内容与上次相同说明剪贴板没被重新
         // 复制过, 直接跳过 — 否则 App 重启后会把残留的旧链接当新链接重新入队。
         // 首次 (无基线, 含升级后) 只把当前剪贴板记为基线, 不自动入队, 避免把历史残留当成新链接。
@@ -153,7 +156,7 @@ public class ClipboardWatcherService extends AccessibilityService {
             if (!monitorOn) { writeLog("monitor off, skip"); return; }
             writeLog("ENQUEUE " + url);
             DownloadService.enqueueParse(this, url);
-            Toast.makeText(this, "检测到抖音链接，已自动加入下载队列", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "检测到链接，已自动加入下载队列", Toast.LENGTH_SHORT).show();
         }
     }
 

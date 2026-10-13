@@ -124,15 +124,18 @@ public class FloatBallService extends Service {
         }
     }
 
-    private static boolean hasDouyinLink(String text) {
-        String url = DownloadService.extractFirstUrl(text == null ? "" : text);
-        return url != null && (url.contains("douyin.com") || url.contains("iesdouyin.com"));
+    private static boolean hasSupportedLink(String text) {
+        return DownloadService.isSupportedUrl(
+                DownloadService.extractFirstUrl(text == null ? "" : text));
     }
 
     private void enqueueFromText(String text) {
         try {
             String url = DownloadService.extractFirstUrl(text);
-            if (url == null) { toast("剪贴板里没有抖音链接"); return; }
+            if (url == null || !DownloadService.isSupportedUrl(url)) {
+                toast("剪贴板里没有支持的链接");
+                return;
+            }
             DownloadService.enqueueParse(this, url);
             toast("已加入下载队列");
         } catch (Exception e) {
@@ -152,8 +155,10 @@ public class FloatBallService extends Service {
                 // 立刻恢复不可聚焦, 避免抢其他 App 的键盘
                 lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
                 try { wm.updateViewLayout(ball, lp); } catch (Exception ignored) {}
-                if (hasDouyinLink(text)) {
+                if (hasSupportedLink(text)) {
                     enqueueFromText(text);
+                } else if (text != null && !text.trim().isEmpty()) {
+                    toast("剪贴板里没有支持的链接");
                 } else {
                     toast("读不到剪贴板(安卓10+限制)：请开启无障碍监控");
                 }

@@ -24,6 +24,7 @@ public class SettingsActivity extends Activity {
     private Switch clipSwitch;
     private LinearLayout clipSub;
     private TextView a11yState;
+    private TextView xhsState;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -97,7 +98,7 @@ public class SettingsActivity extends Activity {
 
         // 剪贴板监控 (状态 + 跳系统无障碍; 开关本身只能由用户在系统设置操作)
         LinearLayout row2 = clickableRow();
-        row2.addView(col("剪贴板自动监控", "检测到抖音链接自动入队 · 点击前往系统无障碍设置"));
+        row2.addView(col("剪贴板自动监控", "检测到抖音/小红书链接自动入队 · 点击前往系统无障碍设置"));
         a11yState = new TextView(this);
         a11yState.setTextColor(Color.parseColor("#9aa3b2"));
         a11yState.setTextSize(15);
@@ -111,7 +112,7 @@ public class SettingsActivity extends Activity {
 
         // 剪贴板自动解析开关 (需无障碍开启; 关闭=仅暂停自动入队, 不影响悬浮球)
         LinearLayout row3 = clickableRow();
-        clipSub = col("剪贴板自动解析", "复制抖音链接后自动解析并下载");
+        clipSub = col("剪贴板自动解析", "复制抖音/小红书链接后自动解析并下载");
         row3.addView(clipSub);
         clipSwitch = new Switch(this);
         clipSwitch.setClickable(false);
@@ -128,6 +129,24 @@ public class SettingsActivity extends Activity {
             refresh();
         });
         root.addView(row3, rowParams());
+
+        root.addView(section("平台账号"));
+
+        // 小红书登录: 本地解析靠这份会话绕开登录墙, 登录态只存在本机 cookie
+        LinearLayout rowXhs = clickableRow();
+        rowXhs.addView(col("小红书账号登录", "本地解析小红书前登录一次 · 登录态仅存本机"));
+        xhsState = new TextView(this);
+        xhsState.setTextColor(Color.parseColor("#9aa3b2"));
+        xhsState.setTextSize(14);
+        rowXhs.addView(xhsState, new LinearLayout.LayoutParams(-2, -2));
+        rowXhs.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(this, XhsLoginActivity.class));
+            } catch (Exception e) {
+                Toast.makeText(this, "打开登录页失败: " + e, Toast.LENGTH_LONG).show();
+            }
+        });
+        root.addView(rowXhs, rowParams());
 
         root.addView(section("下载"));
         root.addView(infoRow("保存位置", "DCIM/Hrdl（音频 Music/Hrdl）"));
@@ -250,6 +269,11 @@ public class SettingsActivity extends Activity {
         boolean clipOn = a11y && prefs.getBoolean("clip_monitor_enabled", true);
         clipSwitch.setChecked(clipOn);
         if (a11y) { for (int i = 0; i < clipSub.getChildCount(); i++) ((TextView) clipSub.getChildAt(i)).setTextColor(Color.WHITE); }
+        if (xhsState != null) {
+            boolean logged = XhsLocal.hasSession(this);
+            xhsState.setText(logged ? "✓ 已登录" : "未登录");
+            xhsState.setTextColor(Color.parseColor(logged ? "#7fd1a0" : "#9aa3b2"));
+        }
     }
 
     /** 打开 ROM 自启动管理页 (各家不同, 逐个尝试常见入口) */

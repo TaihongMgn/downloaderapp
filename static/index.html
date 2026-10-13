@@ -326,6 +326,8 @@ let currentKey = null;             // 结果卡当前显示的队列项
 let pumping = false;
 
 const DOUYIN_ID_RE = /(?:douyin\.com\/(?:video\/|note\/)|iesdouyin\.com\/share\/(?:video|note)\/|douyin\.com\/share\/(?:video|note)\/|modal_id=)(\d{15,})/;
+const XHS_ID_RE = /\/(?:explore|discovery\/item|item)\/([0-9a-fA-F]{24})/;
+const XHS_LINK_RE = /xiaohongshu\.com|xhslink\.(?:com|cn)|rednote\.com/i;
 
 function extractDouyinId(url) {
   const m = DOUYIN_ID_RE.exec(url);
@@ -334,6 +336,8 @@ function extractDouyinId(url) {
 function keyOf(url) {
   const id = extractDouyinId(url);
   if (id) return 'dy:' + id;
+  const x = XHS_ID_RE.exec(url);            // 小红书: 按笔记 ID 归并长链/短链
+  if (x) return 'xhs:' + x[1];
   let u = url.replace(/[?&](utm_[^&]+|spm=[^&]+)/g, '').replace(/\?$/, '').replace(/\/+$/, '');
   return 'u:' + u;
 }
@@ -396,6 +400,25 @@ function addUrlsFromText(text, srcLabel) {
 }
 
 let dlHintShown = false;
+/* 单条解析: 小红书在 App 内走本地解析 (复用本机登录态, 不经服务器), 其余走服务端。
+   本地失败时回退服务端, 最坏与改造前持平。 */
+async function parseOne(item) {
+  if (XHS_LINK_RE.test(item.raw) && window.AndroidDyDl && typeof AndroidDyDl.parseLocal === 'function') {
+    try {
+      const data = JSON.parse(AndroidDyDl.parseLocal(item.raw));
+      if (data && !data.error) return data;
+    } catch (e) { /* 回退服务端 */ }
+  }
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 90000);   // 单条解析 90s 超时, 防队列卡死
+  try {
+    const resp = await fetch('/api/parse?url=' + encodeURIComponent(item.raw), { signal: ctl.signal });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+    return data;
+  } finally { clearTimeout(timer); }
+}
+
 async function pump() {
   if (pumping) return;
   pumping = true;
@@ -406,14 +429,7 @@ async function pump() {
       item.status = 'running';
       renderQueue();
       try {
-        const ctl = new AbortController();
-        const timer = setTimeout(() => ctl.abort(), 90000);   // 单条解析 90s 超时, 防队列卡死
-        let data;
-        try {
-          const resp = await fetch('/api/parse?url=' + encodeURIComponent(item.raw), { signal: ctl.signal });
-          data = await resp.json();
-          if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
-        } finally { clearTimeout(timer); }
+        const data = await parseOne(item);
         // 同 id 二次去重: 服务端已做缓存, 这里防同一视频以不同形态重复展示
         if (data.id && data.source) {
           const dup = queue.find(q => q !== item && (q.status === 'done') && q.result &&
@@ -434,8 +450,8 @@ async function pump() {
         currentKey = item.key;
         saveQueue(); renderQueue();
         // 自动下载: App桥/SW 交给系统下载管理器(后台继续); 浏览器兑底 blob
-        // 视频与图文帖都会自动下载; 其他平台不自动(直链多绑服务器 IP)
-        if ($('autoDl').checked && data.source === 'douyin') {
+        // 抖音与小红书(皆为单平台直链, 不绑服务器 IP)自动下载; 其他平台不自动
+        if ($('autoDl').checked && (data.source === 'douyin' || data.source === 'xhs')) {
           const isApp = !!(window.AndroidDyDl && AndroidDyDl.saveMotion);
           const targets = data.is_image_post
             ? (data.images || []).map((u, i) => {
@@ -613,7 +629,8 @@ function renderResult(q) {
   const title = $('title');
   title.textContent = (q.reused ? '♻ ' : '') + (r.title || '(无标题)');
 
-  const tag = `<span class="tag">${esc(r.source === 'douyin' ? '抖音' : (r.extractor || r.source))}</span>`;
+  const srcName = r.source === 'douyin' ? '抖音' : (r.source === 'xhs' ? '小红书' : (r.extractor || r.source));
+  const tag = `<span class="tag">${esc(srcName)}</span>`;
   const note = q.reused ? '<span class="tag" style="color:#e8c268">缓存复用</span>' : '';
   $('meta').innerHTML = `${esc(r.author ? '👤 ' + r.author : '')}${r.duration ? ' · ⏱ ' + fmtDur(r.duration) : ''} · ${tag}${note}`;
 
@@ -674,10 +691,11 @@ function renderResult(q) {
     acts.appendChild(copyBtn((r.images || []).join('\n'), '复制图片直链'));
     const bg = bgmBtn();
     if (bg) acts.appendChild(bg);
-  } else if (r.source === 'douyin') {
+  } else if (r.source === 'douyin' || r.source === 'xhs') {
     const u = (r.direct_urls.video || [])[0];
     if (u) {
-      acts.appendChild(blobBtn(u, r.title, '⬇ 下载视频 (无水印·最高H264)', null, 'mp4'));
+      const vLabel = r.source === 'douyin' ? '⬇ 下载视频 (无水印·最高H264)' : '⬇ 下载视频 (最高 H264)';
+      acts.appendChild(blobBtn(u, r.title, vLabel, null, 'mp4'));
       acts.appendChild(copyBtn(u));
       const bg = bgmBtn();
       if (bg) acts.appendChild(bg);
@@ -779,9 +797,9 @@ document.addEventListener('keydown', e => {
 /* ================= 批量下载 ================= */
 async function downloadAllVideos() {
   const targets = queue.filter(q => q.status === 'done' && q.result &&
-    q.result.source === 'douyin' && !q.result.is_image_post &&
+    (q.result.source === 'douyin' || q.result.source === 'xhs') && !q.result.is_image_post &&
     (q.result.direct_urls.video || [])[0]);
-  if (!targets.length) { toast('队列里没有可下载的抖音视频'); return; }
+  if (!targets.length) { toast('队列里没有可下载的视频'); return; }
   for (let i = 0; i < targets.length; i++) {
     toast(`📦 批量下载 ${i + 1}/${targets.length}：${(targets[i].result.title || '').slice(0, 16)}…`);
     await download(targets[i].result.direct_urls.video[0], targets[i].result.title, 'mp4', null);

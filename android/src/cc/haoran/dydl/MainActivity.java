@@ -282,8 +282,8 @@ public class MainActivity extends Activity {
                 CharSequence t = cm.getPrimaryClip().getItemAt(0).getText();
                 String text = t == null ? "" : t.toString();
                 String url = DownloadService.extractFirstUrl(text);
-                if (url == null || !(url.contains("douyin.com") || url.contains("iesdouyin.com"))) {
-                    if (fromNotify) Toast.makeText(this, "剪贴板中没有抖音链接", Toast.LENGTH_SHORT).show();
+                if (url == null || !DownloadService.isSupportedUrl(url)) {
+                    if (fromNotify) Toast.makeText(this, "剪贴板中没有支持的链接", Toast.LENGTH_SHORT).show();
                     return;   // 普通打开: 无链接静默
                 }
                 String key = DownloadService.keyOf(url);
@@ -297,7 +297,7 @@ public class MainActivity extends Activity {
                 // 先记 key 防抖 (解析下载中不重复触发); 失败时 DownloadService 会清除
                 prefs.edit().putString("last_auto_key", key).apply();
                 DownloadService.enqueueParse(this, url);
-                Toast.makeText(this, "✓ 剪贴板发现抖音链接，已自动加入下载队列", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "✓ 剪贴板发现链接，已自动加入下载队列", Toast.LENGTH_LONG).show();
             } catch (Exception e) {
                 Log.e(TAG, "auto parse fail", e);
                 Toast.makeText(this, "自动解析失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -378,6 +378,18 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 Log.e(TAG, "enqueueParse fail", e);
                 return false;
+            }
+        }
+
+        /** 本地解析小红书: 同步返回结果 JSON (供网页渲染结果卡), 失败返回 {"error":...}。
+         *  跑在 WebView 的桥接线程, 阻塞等待主线程的取数 WebView 是安全的 (不占 UI 线程)。 */
+        @JavascriptInterface
+        public String parseLocal(String raw) {
+            try {
+                return XhsLocal.parse(MainActivity.this, raw).toString();
+            } catch (Exception e) {
+                String msg = e.getMessage() == null ? "本地解析失败" : e.getMessage();
+                return "{\"error\":" + org.json.JSONObject.quote(msg) + "}";
             }
         }
 

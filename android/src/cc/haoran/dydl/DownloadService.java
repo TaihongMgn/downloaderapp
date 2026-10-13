@@ -269,15 +269,38 @@ public class DownloadService extends Service {
     // ---------------- 静态任务机 (服务与兜底线程共用) ----------------
 
 
+    /** 解析入口: 按平台分流 —— 抖音走服务端通道, 小红书走 App 本地解析 (本地失败回退服务端)。 */
     private static void parseAndFanout(Context app, String raw) throws Exception {
-        // 直接把整段分享文本交给服务端 (服务端自行提取链接/展开短链/aweme_id 缓存去重)。
-        // 不要在 App 端预解析: 手机网络下 followRedirect 结果与服务端不一致, 曾致解析失败。
-        if (extractFirstUrl(raw) == null) throw new Exception("文本中没有链接");
+        String firstUrl = extractFirstUrl(raw);
+        if (firstUrl == null) throw new Exception("文本中没有链接");
+        JSONObject info;
+        if (XhsLocal.isXhs(firstUrl)) {
+            try {
+                info = XhsLocal.parse(app, raw);
+            } catch (Exception localErr) {
+                // 本地取不到 (未登录/风控/页面结构变化) 时回退服务端, 最坏与改造前持平
+                Log.d(TAG, "xhs local parse failed, fallback to server: " + localErr.getMessage());
+                info = serverParse(app, raw);
+            }
+        } else {
+            info = serverParse(app, raw);
+        }
+        if (info.has("error")) throw new Exception(info.optString("error", "解析失败"));
+        fanout(app, info);
+    }
+
+    /** 服务端解析: 整段分享文本交给 /api/parse (服务端自行提取链接/展开短链/缓存去重)。
+     *  抖音链接不要在 App 端预解析: 手机网络下 followRedirect 结果与服务端不一致, 曾致解析失败。 */
+    private static JSONObject serverParse(Context app, String raw) throws Exception {
         String text = raw.length() > 2000 ? raw.substring(0, 2000) : raw;
         String parseUrl = SITE + "/api/parse?url=" + URLEncoder.encode(text, "UTF-8");
         Log.d(TAG, "parse: " + parseUrl);
-        JSONObject info = httpJson(app, parseUrl);
-        if (info.has("error")) throw new Exception(info.optString("error", "解析失败"));
+        return httpJson(app, parseUrl);
+    }
+
+    /** 已解析结果 → 逐条下载。抖音与小红书共用。
+     *  读字段: title / is_image_post / images[] / live_videos[](与 images 对齐) / direct_urls.video[0] */
+    static void fanout(Context app, JSONObject info) throws Exception {
         String title = info.optString("title", "video");
         String safeTitle = sanitize(title.isEmpty() ? "video" : title);
         if (info.optBoolean("is_image_post")) {
@@ -697,10 +720,20 @@ public class DownloadService extends Service {
         return m.find() ? m.group(1) : null;
     }
 
+    /** 是否本 App 支持的平台链接 (抖音 / 小红书)。剪贴板、悬浮球、自动解析共用此判断。 */
+    static boolean isSupportedUrl(String url) {
+        if (url == null || url.isEmpty()) return false;
+        return url.contains("douyin.com") || url.contains("iesdouyin.com") || XhsLocal.isXhs(url);
+    }
+
     static String keyOf(String raw) {
-        String id = extractDouyinId(raw == null ? "" : raw);
+        String s = raw == null ? "" : raw;
+        String id = extractDouyinId(s);
         if (id != null) return "dy:" + id;
-        String u = raw == null ? "" : raw.replaceAll("[?&](utm_[^&]+|spm=[^&]+)", "").replaceAll("/+$", "");
+        // 小红书: 按笔记 ID 归并, 让长链/短链/整段分享文本命中同一个 key
+        String xid = XhsLocal.noteId(s);
+        if (xid != null) return "xhs:" + xid;
+        String u = s.replaceAll("[?&](utm_[^&]+|spm=[^&]+)", "").replaceAll("/+$", "");
         return "u:" + u;
     }
 
