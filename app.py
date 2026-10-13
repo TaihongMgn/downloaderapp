@@ -313,6 +313,119 @@ class DouyinClient:
 DOUYIN_ID_RE = re.compile(r'(?:douyin\.com/(?:video/|note/)|iesdouyin\.com/share/(?:video|note)/|douyin\.com/share/(?:video|note)/|modal_id=)(\d{15,})')
 
 
+
+
+# ================= 小红书解析 =================
+
+XHS_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Referer': 'https://www.xiaohongshu.com/',
+}
+
+XHS_ID_RE = re.compile(r'xiaohongshu\.com/(?:explore|discovery/item)/([0-9a-f]+)')
+
+
+def xhs_extract_id(url):
+    m = XHS_ID_RE.search(url)
+    return m.group(1) if m else None
+
+
+def xhs_resolve_shortlink(url):
+    req = urllib.request.Request(url, headers={
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15'
+    })
+    try:
+        resp = urllib.request.urlopen(req, timeout=15)
+        final = resp.geturl()
+        resp.close()
+        return final
+    except urllib.error.HTTPError as e:
+        return e.geturl() if hasattr(e, 'geturl') else url
+
+
+def xhs_parse(note_id, query_params=''):
+    full_url = f'https://www.xiaohongshu.com/explore/{note_id}'
+    if query_params:
+        full_url += '?' + query_params
+    req = urllib.request.Request(full_url, headers=XHS_HEADERS)
+    resp = urllib.request.urlopen(req, timeout=20)
+    html = resp.read().decode('utf-8', errors='replace')
+
+    m = re.search(r'window\.__INITIAL_STATE__\s*=\s*(.*?)</script>', html)
+    if not m:
+        raise ValueError('小红书分享链接失效或内容已删除')
+    json_str = m.group(1).replace('undefined', 'null')
+    json_str = re.sub(r'\bnew\s+Map\([^)]*\)', '{}', json_str)
+    json_str = re.sub(r'\bnew\s+Set\([^)]*\)', '[]', json_str)
+    state = json.loads(json_str)
+
+    note_map = state.get('note', {}).get('noteDetailMap', {})
+    note_data = note_map.get(note_id, {}).get('note', {})
+    if not note_data:
+        for k, v in note_map.items():
+            if v.get('note'):
+                note_data = v['note']
+                break
+    if not note_data:
+        raise ValueError('笔记数据为空')
+
+    title = note_data.get('title') or note_data.get('desc') or ''
+    user = (note_data.get('user') or {}).get('nickname') or ''
+
+    images = []
+    live_videos = []
+    for im in note_data.get('imageList') or []:
+        info_list = im.get('infoList') or []
+        best = ''
+        for info in reversed(info_list):
+            u = info.get('url') or ''
+            if u:
+                best = u
+                break
+        if not best:
+            ul = im.get('url_list') or []
+            best = ul[-1] if ul else ''
+        images.append(best)
+        lv = im.get('video') or {}
+        lv_media = (lv.get('media') or {}).get('video_stream') or {}
+        live_url = lv_media.get('master_url') or ''
+        if not live_url:
+            lvpa = (lv.get('play_addr') or {}).get('url_list') or []
+            live_url = lvpa[0] if lvpa else ''
+        live_videos.append(live_url or None)
+
+    video_url = None
+    video_data = note_data.get('video') or {}
+    media = video_data.get('media') or {}
+    stream = media.get('stream') or {}
+    for codec in ('h265', 'h264', 'av1', 'h266'):
+        streams = stream.get(codec) or []
+        if streams:
+            mu = streams[0].get('master_url') or ''
+            if mu:
+                video_url = mu
+                break
+    if not video_url:
+        pa = (video_data.get('play_addr') or {}).get('url_list') or []
+        video_url = pa[0] if pa else None
+
+    has_live = any(x for x in live_videos)
+    is_img = bool(images) and not video_url
+
+    return {
+        'source': 'xhs', 'extractor': 'Xiaohongshu',
+        'id': note_id, 'title': title, 'author': user,
+        'duration': 0, 'cover': images[0] if images else '',
+        'images': images, 'live_videos': live_videos,
+        'has_live_photo': has_live, 'is_image_post': is_img,
+        'direct_urls': {'video': [video_url] if video_url else [], 'audio': []},
+        'slideshow_video_urls': [], 'variants': [], 'stats': {},
+        'web_url': full_url,
+    }
+
+
 def mobile_feed_parse(aweme_id):
     """移动端 Feed 通道: 免 Argus / 免 cookie / 免签名, 直出 JSON (~200ms)
     伪装抖音 Android App 的 Cronet UA, 走 App 端推荐流协议"""
@@ -496,6 +609,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlsplit(self.path).path
         if path == '/admin/cookies':
             self._admin_cookies()
+        elif path == '/api/sync_cookie':
+            self._api_sync_cookie()
         else:
             self._send(404, {'error': 'not found'}, cors=False)
 
@@ -564,6 +679,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def _resolve_any(self, url):
         """入口: 短链展开 → 路由到抖音通道或 yt-dlp; 返回 (result, cache_key)"""
+        if 'xiaohongshu.com' in url or 'xhslink.com' in url:
+            if 'xhslink.com' in url:
+                url = xhs_resolve_shortlink(url)
+            note_id = xhs_extract_id(url)
+            if not note_id:
+                raise ValueError('无法从小红书链接中识别出笔记 ID')
+            parsed_q = urllib.parse.urlsplit(url).query
+            ck = f'xhs:{note_id}'
+            with _parse_cache_lock:
+                hit = _parse_cache.get(ck)
+                if hit and time.time() - hit[0] < PARSE_TTL:
+                    return {**hit[1], 'cached': True}, ck
+            return xhs_parse(note_id, parsed_q), ck
         if 'douyin.com' in url or 'iesdouyin.com' in url:
             if 'v.douyin.com' in url:
                 url = resolve_shortlink(url)
