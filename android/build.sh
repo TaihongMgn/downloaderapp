@@ -24,7 +24,7 @@ echo "==> 2/7 aapt2 link 生成 R.java 与基础 APK"
   -I "$PLATFORM" "$OUT/res.zip" \
   --java "$OUT/gen" \
   --min-sdk-version 24 --target-sdk-version 34 \
-  --version-code 39 --version-name 3.9
+  --version-code 40 --version-name 3.10
 
 echo "==> 3/7 javac 编译"
 javac --release 8 -encoding UTF-8 \

@@ -50,6 +50,9 @@ final class XhsLocal {
     private static final String[] XHS_HOSTS =
             {"xiaohongshu.com", "rednote.com", "xhslink.com", "xhslink.cn"};
 
+    /** H.264 优先 (部分手机放不了 HEVC/AV1) */
+    private static final String[] CODEC_ORDER = {"h264", "h265", "av1", "h266"};
+
     /** 页面内取数脚本: 在 __INITIAL_STATE__ 等根对象上做 BFS, 命中目标笔记后只挑出需要的
      *  字段返回 —— 不把整个 note 对象交出去, 免得状态里有循环引用/函数导致序列化抛错。
      *  返回对象而非字符串, 避免 evaluateJavascript 回调里的二次转义。 */
@@ -400,7 +403,7 @@ final class XhsLocal {
             String img = pickImageUrl(item);
             if (img == null || img.isEmpty()) continue;
             images.put(DownloadService.httpsify(img));
-            String live = pickVideo(item.optJSONObject("video"));
+            String live = pickLiveVideo(item);
             if (live != null && !live.isEmpty()) {
                 hasLive = true;
                 lives.put(DownloadService.httpsify(live));
@@ -442,65 +445,127 @@ final class XhsLocal {
         return r;
     }
 
-    /** 图片直链: infoList 最后一个非空 url > urlDefault/url > url_list 最后一个。 */
+    /** 图片直链。优先级参考两个独立实现 (RSSHub / NEORUAA):
+     *  urlDefault (默认原图) > infoList 里 imageScene=WB_DFT 那档 > infoList 任一
+     *  > url > url_list 末项 > traceId 拼接。 */
     private static String pickImageUrl(JSONObject item) {
+        String d = item.optString("urlDefault", "");
+        if (!d.isEmpty()) return d;
+
         JSONArray infoList = item.optJSONArray("infoList");
-        String best = null;
+        String any = null;
         for (int i = 0; infoList != null && i < infoList.length(); i++) {
             JSONObject o = infoList.optJSONObject(i);
             if (o == null) continue;
             String u = o.optString("url", "");
-            if (!u.isEmpty()) best = u;
+            if (u.isEmpty()) continue;
+            if ("WB_DFT".equalsIgnoreCase(o.optString("imageScene", ""))) return u;
+            if (any == null) any = u;
         }
-        if (best != null) return best;
-        String d = item.optString("urlDefault", "");
-        if (!d.isEmpty()) return d;
+        if (any != null) return any;
+
         String u2 = item.optString("url", "");
         if (!u2.isEmpty()) return u2;
-        return lastInUrlList(item.optJSONArray("url_list"));
+
+        String ul = lastInUrlList(item.optJSONArray("url_list"));
+        if (ul != null) return ul;
+
+        // 兜底: 有些图只有 traceId, 可拼出图床地址
+        String tr = item.optString("traceId", "");
+        if (!tr.isEmpty()) return "https://sns-img-qc.xhscdn.com/" + tr;
+        return null;
     }
 
-    /** 视频直链: 优先 H.264 (手机兼容), 再 h265/av1/h266; 最后回退 play_addr。 */
+    /** 实况照片的视频部分: 挂在 imageList[i].livePhoto 上 (不是 imageList[i].video),
+     *  少数结构直接挂在图上, 再兜一层。 */
+    private static String pickLiveVideo(JSONObject item) {
+        String u = pickVideo(item.optJSONObject("livePhoto"));
+        if (u == null || u.isEmpty()) u = pickVideo(item);
+        return u;
+    }
+
+    /** 视频直链。注意: 结尾只认 masterUrl/master_url, 不认裸 url ——
+     *  否则对普通图片调用时会把图片地址当成"视频"。 */
     private static String pickVideo(JSONObject video) {
         if (video == null) return null;
         JSONObject media = video.optJSONObject("media");
         if (media != null) {
+            String u = streamUrl(media.optJSONObject("stream"));
+            if (u != null) return u;
             JSONObject vs = media.optJSONObject("video_stream");
             if (vs != null) {
-                String u = vs.optString("master_url", "");
-                if (!u.isEmpty()) return u;
+                String m = firstNonEmpty(vs, "masterUrl", "master_url");
+                if (m != null) return m;
             }
-            JSONObject stream = media.optJSONObject("stream");
-            if (stream != null) {
-                String[] order = {"h264", "h265", "av1", "h266"};
-                for (String codec : order) {
-                    String u = firstMasterUrl(stream.optJSONArray(codec));
-                    if (u != null) return u;
+        }
+        String u2 = streamUrl(video.optJSONObject("stream"));
+        if (u2 != null) return u2;
+        String key = originKey(video);
+        if (key != null) return key;
+        JSONObject pa = video.optJSONObject("play_addr");
+        if (pa != null) {
+            String u3 = firstInUrlList(pa.optJSONArray("url_list"));
+            if (u3 != null) return u3;
+        }
+        return firstNonEmpty(video, "masterUrl", "master_url");
+    }
+
+    /** 从 media.stream 选直链: 优先 H.264 (手机兼容), 并跳过明确带水印的档位。 */
+    private static String streamUrl(JSONObject stream) {
+        if (stream == null) return null;
+        String watermarked = null;
+        for (String codec : CODEC_ORDER) {
+            JSONArray arr = stream.optJSONArray(codec);
+            for (int i = 0; arr != null && i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                String raw = arr.optString(i, "");
+                String u = itemUrl(o, raw);
+                if (u == null) continue;
+                if (isWatermarked(o)) {
+                    if (watermarked == null) watermarked = u;
+                } else {
+                    return u;
                 }
             }
         }
-        String pa = firstUrlList(video.optJSONObject("play_addr"));
-        if (pa != null) return pa;
-        return video.optString("master_url", "");
+        return watermarked;
     }
 
-    private static String firstMasterUrl(JSONArray arr) {
-        for (int i = 0; arr != null && i < arr.length(); i++) {
-            JSONObject o = arr.optJSONObject(i);
-            if (o == null) continue;
-            String u = o.optString("master_url", "");
-            if (!u.isEmpty()) return u;
-            String bu = firstInUrlList(o.optJSONArray("backup_urls"));
-            if (bu != null) return bu;
-            String pa = firstUrlList(o.optJSONObject("play_addr"));
-            if (pa != null) return pa;
+    /** stream 里单个档位的直链: masterUrl/master_url > backupUrls/backup_urls > url。 */
+    private static String itemUrl(JSONObject o, String raw) {
+        if (o == null) return (raw != null && raw.startsWith("http")) ? raw : null;
+        String u = firstNonEmpty(o, "masterUrl", "master_url", "url");
+        if (u == null) u = firstInUrlList(o.optJSONArray("backupUrls"));
+        if (u == null) u = firstInUrlList(o.optJSONArray("backup_urls"));
+        return u;
+    }
+
+    /** 已知的水印档位标记 (streamType 259/309、streamDesc WEB_LIVEPHOTO_19)。 */
+    private static boolean isWatermarked(JSONObject o) {
+        if (o == null) return false;
+        int st = o.optInt("streamType", 0);
+        if (st == 259 || st == 309) return true;
+        return "WEB_LIVEPHOTO_19".equalsIgnoreCase(o.optString("streamDesc", ""));
+    }
+
+    /** 原片 key → sns-video-bd 直链 (无水印原视频优先)。 */
+    private static String originKey(JSONObject video) {
+        if (video == null) return null;
+        JSONObject consumer = video.optJSONObject("consumer");
+        String key = consumer == null ? null : firstNonEmpty(consumer, "originVideoKey");
+        if (key == null) key = firstNonEmpty(video, "originVideoKey");
+        if (key == null || key.isEmpty()) return null;
+        if (key.startsWith("http")) return key;
+        return "https://sns-video-bd.xhscdn.com/" + (key.startsWith("/") ? key.substring(1) : key);
+    }
+
+    private static String firstNonEmpty(JSONObject o, String... keys) {
+        if (o == null) return null;
+        for (String k : keys) {
+            String v = o.optString(k, "");
+            if (v != null && !v.isEmpty() && !"null".equals(v)) return v;
         }
         return null;
-    }
-
-    private static String firstUrlList(JSONObject o) {
-        if (o == null) return null;
-        return firstInUrlList(o.optJSONArray("url_list"));
     }
 
     private static String firstInUrlList(JSONArray a) {
