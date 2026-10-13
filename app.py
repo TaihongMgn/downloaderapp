@@ -442,7 +442,12 @@ def mobile_feed_parse(aweme_id):
     al = data.get('aweme_list') or data.get('aweme_details') or []
     if not al:
         raise ValueError('移动端 Feed 无结果: ' + str(data.get('status_code', '')))
-    return al[0]
+    for a in al:
+        if str(a.get('aweme_id')) == str(aweme_id):
+            return a
+    # 请求的 id 不在返回列表里: 抖音把无法解析的请求退回成推荐流 (status_code 仍为 0),
+    # 直接取 al[0] 会下载到一条无关的热门视频。此处抛错交给通道 2 正确报"视频不存在"。
+    raise ValueError('移动端 Feed 未命中请求的视频(退回推荐流): ' + str(aweme_id))
 
 
 def extract_douyin_id(raw):

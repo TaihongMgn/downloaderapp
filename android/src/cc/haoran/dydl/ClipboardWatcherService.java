@@ -39,6 +39,11 @@ public class ClipboardWatcherService extends AccessibilityService {
     private static final long SWEEP_COOLDOWN_MS = 12000; // 抖音前台静默扫描冷却
     private static final int SEEN_MAX = 20;
     private final java.util.ArrayDeque<String> seen = new java.util.ArrayDeque<>();
+
+    /** 上次已处理剪贴板内容的指纹 (跨进程重启持久化): 静默扫描据此判断"内容是否真被重新复制过" */
+    private static final String PREFS = "dydl";
+    private static final String PREF_LAST_FP = "last_clip_fp";
+    private String lastHandledFp = null;
     private final SimpleDateFormat logFmt = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.US);
     private final Handler handler = new Handler(Looper.getMainLooper());
     private long lastReadAt = 0;
@@ -51,6 +56,10 @@ public class ClipboardWatcherService extends AccessibilityService {
         Log.d("DyDl", "watcher connected");
         writeLog("watcher connected");
         synchronized (seen) { seen.clear(); }
+        // 恢复上次已处理内容指纹: 重启后剪贴板里残留的旧链接不会被静默扫描当成新链接
+        try {
+            lastHandledFp = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_LAST_FP, null);
+        } catch (Exception ignored) {}
     }
 
     @Override
@@ -73,15 +82,15 @@ public class ClipboardWatcherService extends AccessibilityService {
         if (trigger && now - lastReadAt >= READ_COOLDOWN_MS) {
             lastReadAt = now;
             writeLog("trigger " + pkg + ": " + etext.substring(0, Math.min(60, etext.length())));
-            stealFocusAndRead();
+            stealFocusAndRead(false);
         } else if (sweep && now - lastSweepAt >= SWEEP_COOLDOWN_MS) {
             lastSweepAt = now;
-            stealFocusAndRead();   // 抖音前台静默扫描兜底
+            stealFocusAndRead(true);   // 抖音前台静默扫描兜底
         }
     }
 
     /** 隐形 1px 可聚焦悬浮窗抢系统焦点 150ms → 读剪贴板 → 移除 */
-    private void stealFocusAndRead() {
+    private void stealFocusAndRead(boolean fromSweep) {
         try {
             WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
             View v = new View(this);
@@ -105,18 +114,30 @@ public class ClipboardWatcherService extends AccessibilityService {
                     }
                 } catch (Exception ignored) {}
                 try { wm.removeView(v); } catch (Exception ignored) {}
-                processText(text);
+                processText(text, fromSweep);
             }, 150);
         } catch (Exception e) {
             writeLog("steal fail: " + e);
         }
     }
 
-    private void processText(String text) {
+    private void processText(String text, boolean fromSweep) {
         if (text == null) text = "";
         lastClipboard = text;
         writeLog("read: " + text.substring(0, Math.min(80, text.length())));
+        // 内容指纹: 先判断是否为新内容, 再记录本次
+        String fp = text.length() + ":" + Integer.toHexString(text.hashCode());
+        boolean hasBaseline = lastHandledFp != null;
+        boolean isNew = !fp.equals(lastHandledFp);
+        lastHandledFp = fp;
+        try {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_LAST_FP, fp).apply();
+        } catch (Exception ignored) {}
         if (!text.contains("douyin.com") && !text.contains("iesdouyin.com")) return;
+        // 静默扫描只是兜底 (复制事件的窗口文本未必抓得到): 内容与上次相同说明剪贴板没被重新
+        // 复制过, 直接跳过 — 否则 App 重启后会把残留的旧链接当新链接重新入队。
+        // 首次 (无基线, 含升级后) 只把当前剪贴板记为基线, 不自动入队, 避免把历史残留当成新链接。
+        if (fromSweep && (!hasBaseline || !isNew)) { writeLog("sweep 无基线或内容未变, 跳过"); return; }
 
         Matcher m = Pattern.compile("https?://[^\\s\"'<>）)】，。]+").matcher(text);
         while (m.find()) {
